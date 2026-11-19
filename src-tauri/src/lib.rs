@@ -1,3 +1,4 @@
+mod articles;
 mod network;
 mod rankings;
 mod storage;
@@ -21,7 +22,8 @@ pub fn run() {
             storage::export_file,
             network::http_request,
             network::cancel_http,
-            network::fetch_page,
+            articles::validate_article_rule,
+            articles::read_article_page,
             rankings::ranking_categories,
             rankings::ranking_cover,
             rankings::collect_ranking

@@ -29,6 +29,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rfd = "0.15"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 scraper = "0.24"
+encoding_rs = "0.8"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

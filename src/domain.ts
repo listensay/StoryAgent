@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { rankingSchema } from './rankings';
+import { articleRuleSchema, defaultArticleRule } from './articleRules';
 
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
@@ -19,7 +20,7 @@ const styleSchema = z.object({ id: z.string(), name: z.string(), content: z.stri
 const referenceSchema = z.object({ id: z.string(), title: z.string(), source: z.string(), kind: z.enum(['ranking', 'text']), content: z.string(), createdAt: z.string(), ranking: rankingSchema.optional(), bookUrl: z.string().optional() });
 const stepSchema = z.object({ id: z.string(), chapterId: z.string(), title: z.string(), status: z.enum(['pending', 'running', 'ready', 'accepted']), output: z.string(), baseContent: z.string(), basePlan: z.string(), selection: z.string(), selectionStart: z.number().int(), selectionEnd: z.number().int(), section: z.string().default(''), aggregate: z.boolean().default(false), intermediate: z.boolean().default(false), inputIds: z.array(z.string()).optional() });
 const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, profileId: z.string(), styleId: z.string(), instruction: z.string(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['running', 'paused', 'failed', 'ready', 'accepted']), error: z.string(), steps: z.array(stepSchema), createdAt: z.string() });
-export const workspaceSchema = z.object({ schemaVersion: z.literal(1), projects: z.array(projectSchema), providers: z.array(providerSchema), profiles: z.array(profileSchema), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
+export const workspaceSchema = z.object({ schemaVersion: z.literal(1), projects: z.array(projectSchema), providers: z.array(providerSchema), profiles: z.array(profileSchema), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), articleRules: z.array(articleRuleSchema).default(() => [{ ...defaultArticleRule }]), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type Chapter = z.infer<typeof chapterSchema>;
@@ -41,7 +42,7 @@ export const builtinSkills = [
   builtin('文本拆解', '结构、节奏与写作手法', ['analyze'], '依据原文逐段辨认人物、事件、情绪变化、伏笔和表达手法。用结构解释阅读效果，给出可迁移的方法而不是复用原文情节。引用必须准确，标明段落编号；找不到证据的结论应舍弃。'),
   builtin('表达风格', '提取可复用的表达规则', ['style'], '提取视角、叙述距离、句法、段落节奏、词语选择、描写密度、对话方式、修辞和禁用表达。给出简洁可编辑的规则。风格不包含人物、剧情、专有设定或原文句子，不以模仿特定作者身份为目标。'),
 ];
-export const emptyWorkspace = (): Workspace => ({ schemaVersion: 1, projects: [], providers: [], profiles: [], skills: structuredClone(builtinSkills), styles: [], references: [], jobs: [], activeProjectId: '', updatedAt: now() });
+export const emptyWorkspace = (): Workspace => ({ schemaVersion: 1, projects: [], providers: [], profiles: [], skills: structuredClone(builtinSkills), styles: [], references: [], articleRules: [{ ...defaultArticleRule }], jobs: [], activeProjectId: '', updatedAt: now() });
 export function parseWorkspace(raw: string): Workspace {
   const data = workspaceSchema.parse(JSON.parse(raw));
   data.jobs = data.jobs.map(job => job.status === 'running' ? { ...job, status: 'paused', steps: job.steps.map(step => step.status === 'running' ? { ...step, status: 'pending' } : step) } : job);

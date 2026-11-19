@@ -1,4 +1,5 @@
 import { type Ranking, type RankingOptions, rankingSchema } from './rankings';
+import { type ArticlePage, type ArticleRule } from './articleRules';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { emptyWorkspace, parseWorkspace, type Workspace, uid } from './domain';
@@ -52,8 +53,20 @@ export async function pickFiles(options: { folder?: boolean; skills?: boolean } 
 export async function exportFile(name: string, content: string): Promise<boolean> {
   return invoke('export_file', { name, content });
 }
-export async function fetchPage(url: string): Promise<{ title: string; text: string; links: { title: string; url: string }[] }> {
-  return invoke('fetch_page', { url });
+export function validateArticleRule(rule: ArticleRule): Promise<void> {
+  return invoke('validate_article_rule', { rule });
+}
+export async function readArticlePage(rule: ArticleRule, url: string, mode: 'catalog' | 'chapter', signal: AbortSignal): Promise<ArticlePage> {
+  signal.throwIfAborted();
+  const id = uid();
+  const abort = () => { void invoke('cancel_http', { id }).catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    const result = await invoke<ArticlePage>('read_article_page', { id, rule, url, mode });
+    signal.throwIfAborted();
+    return result;
+  } finally { signal.removeEventListener('abort', abort); }
 }
 
 export function rankingCategories(channel: string, board: string): Promise<{ id: string; name: string }[]> {
