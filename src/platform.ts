@@ -1,3 +1,4 @@
+import { type Ranking, type RankingOptions, rankingSchema } from './rankings';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { emptyWorkspace, parseWorkspace, type Workspace, uid } from './domain';
@@ -53,4 +54,20 @@ export async function exportFile(name: string, content: string): Promise<boolean
 }
 export async function fetchPage(url: string): Promise<{ title: string; text: string; links: { title: string; url: string }[] }> {
   return invoke('fetch_page', { url });
+}
+
+export function rankingCategories(channel: string, board: string): Promise<{ id: string; name: string }[]> {
+  return invoke('ranking_categories', { channel, board });
+}
+export async function collectRanking(options: RankingOptions, signal: AbortSignal): Promise<Ranking> {
+  signal.throwIfAborted();
+  const id = uid();
+  const abort = () => { void invoke('cancel_http', { id }).catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    const result = await invoke<Omit<Ranking, 'collectedAt'>>('collect_ranking', { request: { ...options, id } });
+    signal.throwIfAborted();
+    return rankingSchema.parse({ ...result, collectedAt: new Date().toISOString() });
+  } finally { signal.removeEventListener('abort', abort); }
 }

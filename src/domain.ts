@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { rankingSchema } from './rankings';
 
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
@@ -15,7 +16,7 @@ const providerSchema = z.object({ id: z.string(), name: z.string(), protocol: z.
 const profileSchema = z.object({ id: z.string(), name: z.string(), providerId: z.string(), model: z.string(), tasks: z.array(taskSchema), temperature: z.number().min(0).max(2), sampling: z.boolean(), maxTokens: z.number().int().min(256).max(200000), contextChars: z.number().int().min(4000).max(500000), reasoning: z.enum(['off', 'effort', 'budget', 'adaptive']), effort: z.enum(['low', 'medium', 'high', 'xhigh']), budget: z.number().int().min(1024), extra: z.string() });
 const skillSchema = z.object({ id: z.string(), name: z.string(), description: z.string(), source: z.string(), version: z.string(), enabled: z.boolean(), builtin: z.boolean(), tasks: z.array(taskSchema), files: z.array(z.object({ path: z.string(), content: z.string() })), revisions: z.array(z.object({ version: z.string(), files: z.array(z.object({ path: z.string(), content: z.string() })), savedAt: z.string() })).default([]) });
 const styleSchema = z.object({ id: z.string(), name: z.string(), content: z.string(), source: z.string(), createdAt: z.string() });
-const referenceSchema = z.object({ id: z.string(), title: z.string(), source: z.string(), kind: z.enum(['ranking', 'text']), content: z.string(), createdAt: z.string() });
+const referenceSchema = z.object({ id: z.string(), title: z.string(), source: z.string(), kind: z.enum(['ranking', 'text']), content: z.string(), createdAt: z.string(), ranking: rankingSchema.optional(), bookUrl: z.string().optional() });
 const stepSchema = z.object({ id: z.string(), chapterId: z.string(), title: z.string(), status: z.enum(['pending', 'running', 'ready', 'accepted']), output: z.string(), baseContent: z.string(), basePlan: z.string(), selection: z.string(), selectionStart: z.number().int(), selectionEnd: z.number().int(), section: z.string().default(''), aggregate: z.boolean().default(false), intermediate: z.boolean().default(false), inputIds: z.array(z.string()).optional() });
 const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, profileId: z.string(), styleId: z.string(), instruction: z.string(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['running', 'paused', 'failed', 'ready', 'accepted']), error: z.string(), steps: z.array(stepSchema), createdAt: z.string() });
 export const workspaceSchema = z.object({ schemaVersion: z.literal(1), projects: z.array(projectSchema), providers: z.array(providerSchema), profiles: z.array(profileSchema), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });

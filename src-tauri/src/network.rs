@@ -16,7 +16,7 @@ pub struct RequestState {
     cancelled: HashMap<String, Instant>,
 }
 impl RequestState {
-    fn begin(&mut self, id: &str, sender: watch::Sender<bool>) -> Result<(), String> {
+    pub(crate) fn begin(&mut self, id: &str, sender: watch::Sender<bool>) -> Result<(), String> {
         self.cancelled
             .retain(|_, time| time.elapsed() < Duration::from_secs(60));
         if self.cancelled.remove(id).is_some() {
@@ -27,6 +27,9 @@ impl RequestState {
         }
         self.active.insert(id.to_string(), sender);
         Ok(())
+    }
+    pub(crate) fn finish(&mut self, id: &str) {
+        self.active.remove(id);
     }
     fn cancel(&mut self, id: String) {
         if let Some(sender) = self.active.get(&id) {
