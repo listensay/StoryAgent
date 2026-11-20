@@ -1,5 +1,6 @@
 import { type Ranking, type RankingOptions, rankingSchema } from './rankings';
-import { type ArticlePage, type ArticleRule } from './articleRules';
+import { bookSearchPageSchema, type ArticlePage, type ArticleRule } from './articleRules';
+import { researchCatalogSchema, researchTextSchema } from './researchSources';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { emptyWorkspace, parseWorkspace, type Workspace, uid } from './domain';
@@ -26,6 +27,9 @@ export async function saveCredential(id: string, key: string) {
   await invoke('save_credential', { id, secret: key });
 }
 type Request = { url: string; method?: string; headers?: Record<string, string>; body?: string; providerId?: string; keyHeader?: string; keyPrefix?: string; signal?: AbortSignal; onChunk?: (text: string) => void; binary?: boolean };
+export class HttpError extends Error {
+  constructor(readonly status: number, message: string) { super(message); this.name = 'HttpError'; }
+}
 export async function http(request: Request): Promise<{ text: string; bytes: Uint8Array; status: number; url?: string }> {
   request.signal?.throwIfAborted();
   const id = uid();
@@ -38,7 +42,7 @@ export async function http(request: Request): Promise<{ text: string; bytes: Uin
     const response = await invoke<{ text: string; bytes: number[]; status: number }>('http_request', { request: { id, url: request.url, method: request.method ?? 'GET', headers: request.headers ?? {}, body: request.body ?? null, providerId: request.providerId ?? null, keyHeader: request.keyHeader ?? null, keyPrefix: request.keyPrefix ?? null, stream: !!request.onChunk, binary: !!request.binary } });
     const tail = decoder.decode(); if (tail) request.onChunk?.(tail);
     request.signal?.throwIfAborted();
-    if (response.status >= 300) throw new Error(errorText(response.text, response.status));
+    if (response.status >= 300) throw new HttpError(response.status, errorText(response.text, response.status));
     return { ...response, bytes: new Uint8Array(response.bytes) };
   } finally { unlisten(); request.signal?.removeEventListener('abort', abort); }
 }
@@ -71,6 +75,35 @@ export async function readArticlePage(rule: ArticleRule, url: string, mode: 'cat
 
 export function rankingCategories(channel: string, board: string): Promise<{ id: string; name: string }[]> {
   return invoke('ranking_categories', { channel, board });
+}
+async function researchRequest(command: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
+  signal.throwIfAborted();
+  const id = uid();
+  const abort = () => { void invoke('cancel_http', { id }).catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    const result = await invoke(command, { id, ...args });
+    signal.throwIfAborted();
+    return result;
+  } finally { signal.removeEventListener('abort', abort); }
+}
+export async function searchArticleBooks(rule: ArticleRule, query: string, page: number, signal: AbortSignal) {
+  return bookSearchPageSchema.parse(await researchRequest('search_article_books', { rule, query, page }, signal));
+}
+export async function readResearchCatalog(bookUrl: string, signal: AbortSignal, rule?: ArticleRule) {
+  if (rule) {
+    const result = await readArticlePage(rule, bookUrl, 'catalog', signal);
+    return researchCatalogSchema.parse({ bookUrl, title: result.title, chapters: result.chapters.map(c => ({ ...c, id: c.url, readable: true })) });
+  }
+  return researchCatalogSchema.parse(await researchRequest('read_research_catalog', { bookUrl }, signal));
+}
+export async function readResearchChapter(bookUrl: string, chapterId: string, signal: AbortSignal, rule?: ArticleRule) {
+  if (rule) {
+    const result = await readArticlePage(rule, chapterId, 'chapter', signal);
+    return researchTextSchema.parse({ id: chapterId, title: result.title, url: chapterId, content: result.text });
+  }
+  return researchTextSchema.parse(await researchRequest('read_research_chapter', { bookUrl, chapterId }, signal));
 }
 export async function collectRanking(options: RankingOptions, signal: AbortSignal): Promise<Ranking> {
   signal.throwIfAborted();

@@ -39,8 +39,8 @@ export function Modal({ title, children, footer, onClose, wide = false, opened =
 export function Confirm({ title, content, onConfirm, onClose, ...visibility }: { title: string; content: string; onConfirm: () => void; onClose: () => void } & ModalVisibilityProps) {
   return <Modal title={title} onClose={onClose} {...visibility} footer={<><Button onClick={onClose}>取消</Button><Button danger onClick={() => { onConfirm(); onClose(); }}>确认</Button></>}><Text size="sm">{content}</Text></Modal>;
 }
-export function Select({ label, value, onChange, options, className }: { label: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[]; className?: string }) {
-  return <MantineSelect label={label || undefined} aria-label={label} value={value} onChange={v => onChange(v ?? '')} data={options} allowDeselect={false} searchable={options.length > 8} nothingFoundMessage="暂无选项" className={className} rightSection={<ChevronDown size={18} />} />;
+export function Select({ label, value, onChange, options, className, placeholder, disabled }: { label: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[]; className?: string; placeholder?: string; disabled?: boolean }) {
+  return <MantineSelect label={label || undefined} aria-label={label} value={value || (options.some(o => o.value === '') ? '' : null)} onChange={v => onChange(v ?? '')} data={options} limit={50} allowDeselect={false} searchable={options.length > 8} nothingFoundMessage="暂无选项" className={className} placeholder={placeholder} disabled={disabled} rightSection={<ChevronDown size={18} />} />;
 }
 export function OptionTabs({ value, onChange, options, label }: { value: string; onChange: (value: string) => void; options: { value: string; label: string }[]; label: string }) {
   return <Tabs value={value} onChange={v => { if (v !== null) onChange(v); }}><Tabs.List aria-label={label}>{options.map(o => <Tabs.Tab value={o.value} key={o.value}>{o.label}</Tabs.Tab>)}</Tabs.List></Tabs>;

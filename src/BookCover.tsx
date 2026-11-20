@@ -6,7 +6,8 @@ import { BookOpen } from './icons';
 import type { RankedBook } from './rankings';
 
 const covers = new Map<string, Promise<Blob>>();
-function loadCover(book: RankedBook) {
+type CoverBook = Pick<RankedBook, 'url' | 'title' | 'coverUrl'>;
+function loadCover(book: CoverBook) {
   const key = book.url;
   let pending = covers.get(key);
   if (!pending) {
@@ -19,7 +20,7 @@ function loadCover(book: RankedBook) {
   return pending;
 }
 
-export function BookCover({ book }: { book: RankedBook }) {
+export function BookCover({ book }: { book: CoverBook }) {
   const { ref, entry } = useIntersection<HTMLDivElement>({ threshold: 0 });
   const [source, setSource] = useState('');
   const [visible, setVisible] = useState(false);

@@ -1,5 +1,6 @@
 mod articles;
 mod network;
+mod research;
 mod rankings;
 mod storage;
 #[tauri::command]
@@ -24,6 +25,9 @@ pub fn run() {
             network::cancel_http,
             articles::validate_article_rule,
             articles::read_article_page,
+            articles::search_article_books,
+            research::read_research_catalog,
+            research::read_research_chapter,
             rankings::ranking_categories,
             rankings::ranking_cover,
             rankings::collect_ranking

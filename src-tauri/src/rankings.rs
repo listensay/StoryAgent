@@ -113,7 +113,7 @@ async fn page(client: &reqwest::Client, url: &str) -> Result<String, String> {
     }
     String::from_utf8(bytes).map_err(|_| "榜单页面编码无法识别".into())
 }
-fn field(value: &Value, keys: &[&str]) -> String {
+pub(crate) fn field(value: &Value, keys: &[&str]) -> String {
     keys.iter()
         .find_map(|key| match &value[*key] {
             Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_owned()),
@@ -122,15 +122,15 @@ fn field(value: &Value, keys: &[&str]) -> String {
         })
         .unwrap_or_default()
 }
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 24 && id.bytes().all(|c| c.is_ascii_digit())
 }
-fn clear_text(text: &str) -> bool {
+pub(crate) fn clear_text(text: &str) -> bool {
     !text
         .chars()
         .any(|c| ('\u{e000}'..='\u{f8ff}').contains(&c) || c == '\u{fffd}')
 }
-fn script_json(html: &str, qidian: bool) -> Result<Value, String> {
+pub(crate) fn script_json(html: &str, qidian: bool) -> Result<Value, String> {
     let doc = Html::parse_document(html);
     let selector = Selector::parse(if qidian {
         "script#vite-plugin-ssr_pageContext"

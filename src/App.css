@@ -55,8 +55,6 @@ small { font-size: 12px; line-height: 1.67; }
 .chapter-title { flex: 1; min-width: 0; }
 .novel-editor { min-height: 150px; }
 .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--mantine-color-gray-2); flex-wrap: wrap; color: var(--story-muted); font-size: 12px; }
-.chapter-style { width: 190px; }
-.chapter-style .mantine-InputWrapper-label { display: none; }
 .agent-panel { display: flex; flex-direction: column; border-left: 1px solid var(--mantine-color-gray-2); background: #fbfbfb; overflow: auto; min-height: 0; }
 .agent-panel .panel-heading { position: sticky; top: 0; background: #fbfbfb; z-index: 1; flex-shrink: 0; }
 .agent-form { padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid var(--mantine-color-gray-2); }
@@ -98,9 +96,6 @@ small { font-size: 12px; line-height: 1.67; }
 .item-main small { display: block; color: var(--story-muted); margin-top: 5px; }
 .reference-preview { max-height: 330px; overflow: auto; }
 .source-name { font-size: 12px; margin-bottom: 16px; overflow-wrap: anywhere; }
-.style-card { display: flex; flex-direction: column; gap: 18px; }
-.style-card .prose { margin-top: 12px; max-height: 220px; overflow: hidden; color: var(--mantine-color-gray-7); }
-.style-card > .row { margin-top: auto; }
 .modal-footer { border-top: 1px solid var(--mantine-color-gray-2); }
 .load-screen { min-height: 100dvh; padding: 32px; }
 @media (max-width: 1439px) {

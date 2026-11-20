@@ -1,0 +1,3 @@
+.root :where(pre, code, blockquote) {
+  font-size: inherit;
+}

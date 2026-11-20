@@ -96,7 +96,8 @@ pub async fn http_request(
         requests.begin(&request.id, sender)?;
     }
     let result = async {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(600)).connect_timeout(Duration::from_secs(20)).redirect(if request.provider_id.is_some() { reqwest::redirect::Policy::none() } else { reqwest::redirect::Policy::limited(5) }).build().map_err(|e| e.to_string())?;
+        let authenticated = request.provider_id.is_some() || request.headers.keys().any(|key| ["authorization", "x-api-key", "x-goog-api-key"].iter().any(|name| key.eq_ignore_ascii_case(name)));
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(600)).connect_timeout(Duration::from_secs(20)).redirect(if authenticated { reqwest::redirect::Policy::none() } else { reqwest::redirect::Policy::limited(5) }).build().map_err(|e| e.to_string())?;
         let method = request.method.parse::<reqwest::Method>().map_err(|_| "请求方法无效")?;
         let mut builder = client.request(method, url);
         for (key, value) in &request.headers { builder = builder.header(key, value); }

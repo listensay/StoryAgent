@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button as MantineButton, Group, Loader, Paper, Select as MantineSelect, SimpleGrid, Stack, Text, Title, Accordion, ScrollArea } from '@mantine/core';
 import { Button, Empty, Select } from '../components';
 import { ChevronDown, TrendingUp } from '../icons';
@@ -62,16 +62,16 @@ export function RankingScan({ store, onCollected }: { store: Store; onCollected:
   </Stack></Paper>;
 }
 
-export function RankingResults({ ranking, onResearch }: { ranking: Ranking; onResearch: (book: RankedBook, task: 'analyze' | 'style') => void }) {
+export const RankingResults = memo(function RankingResults({ ranking, onResearch }: { ranking: Ranking; onResearch: (book: RankedBook, task: 'analyze' | 'style') => void }) {
   return <Stack gap="md">
     <Group gap="sm"><Badge variant="light">{ranking.books.length} 部作品</Badge><Text size="sm" c="dimmed">{new Date(ranking.collectedAt).toLocaleString('zh-CN')}</Text></Group>
     {ranking.skipped > 0 && <Alert color="yellow">{ranking.skipped} 部作品未获取成功，可重新扫榜。</Alert>}
     <ScrollArea.Autosize mah={560} type="auto" offsetScrollbars><Accordion variant="separated" radius="md" chevron={<ChevronDown size={18} />}>
       {ranking.books.map(book => <Accordion.Item value={book.id} key={book.id}>
         <Accordion.Control><Group wrap="nowrap" align="flex-start" gap="md"><Text fw={600} c="story.8" w={26} style={{ flexShrink: 0 }}>{book.rank}</Text><BookCover book={book} /><Stack gap={4} style={{ minWidth: 0 }}><Text fw={600}>{book.title}</Text><Text size="sm" c="dimmed">{[book.author, book.words && (/字$/.test(book.words) ? book.words : `${book.words} 字`), book.status, ...book.metrics.map(m => `${m.label} ${m.value}`)].filter(Boolean).join(' · ')}</Text></Stack></Group></Accordion.Control>
-        <Accordion.Panel><Stack gap="sm"><Text size="sm" c="dimmed">{book.genre}</Text><Text style={{ whiteSpace: 'pre-wrap' }}>{book.intro || '暂无简介'}</Text><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{book.url}</Text><Group><Button primary onClick={() => onResearch(book, 'analyze')}>拆文</Button><Button onClick={() => onResearch(book, 'style')}>提取风格</Button></Group></Stack></Accordion.Panel>
+        <Accordion.Panel><Stack gap="sm"><Text size="sm" c="dimmed">{book.genre}</Text><Text style={{ whiteSpace: 'pre-wrap' }}>{book.intro || '暂无简介'}</Text><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{book.url}</Text><Group><Button primary onClick={() => onResearch(book, 'analyze')}>拆文</Button><Button onClick={() => onResearch(book, 'style')}>提取 Skill</Button></Group></Stack></Accordion.Panel>
       </Accordion.Item>)}
     </Accordion></ScrollArea.Autosize>
   </Stack>;
-}
+});
 export function NoRankings() { return <Empty icon={TrendingUp} title="暂无扫榜记录" />; }

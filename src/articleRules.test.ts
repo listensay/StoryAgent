@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { articleRange, defaultArticleRule } from './articleRules';
+import { articleRange, defaultArticleRule, defaultArticleRules, ixdzsArticleRule } from './articleRules';
 import { emptyWorkspace, parseWorkspace } from './domain';
 
 describe('article collection settings', () => {
@@ -7,8 +7,20 @@ describe('article collection settings', () => {
     const old: Partial<ReturnType<typeof emptyWorkspace>> = emptyWorkspace();
     delete old.articleRules;
     const restored = parseWorkspace(JSON.stringify(old));
-    expect(restored.articleRules).toEqual([defaultArticleRule]);
+    expect(restored.articleRules).toEqual(defaultArticleRules);
     expect(restored.skills).toEqual(old.skills);
+  });
+  it('adds the new site once without overwriting customized rules or restoring later deletions', () => {
+    const old: Partial<ReturnType<typeof emptyWorkspace>> = emptyWorkspace();
+    delete old.articleRulesRevision;
+    old.articleRules = [{ ...defaultArticleRule, contentSelector: '#custom', search: undefined }];
+    const loaded = parseWorkspace(JSON.stringify(old));
+    expect(loaded.articleRules[0].contentSelector).toBe('#custom');
+    expect(loaded.articleRules[0].search).toEqual(defaultArticleRule.search);
+    expect(loaded.articleRules[1]).toEqual(ixdzsArticleRule);
+    expect(parseWorkspace(JSON.stringify(loaded))).toEqual(loaded);
+    loaded.articleRules = [];
+    expect(parseWorkspace(JSON.stringify(loaded)).articleRules).toEqual([]);
   });
   it('retains added, edited and deleted rules after saving and restoring', () => {
     const workspace = emptyWorkspace();

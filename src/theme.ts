@@ -1,4 +1,4 @@
-import { createTheme, ActionIcon, Badge, Button, Checkbox, Group, Input, InputWrapper, Modal, NavLink, NumberInput, Paper, Select, Tabs, Text, Textarea, Tooltip } from '@mantine/core';
+import { createTheme, ActionIcon, Badge, Button, Checkbox, Group, Input, InputWrapper, Modal, NavLink, NumberInput, Paper, ScrollArea, Select, Tabs, Text, Textarea, Tooltip } from '@mantine/core';
 import { createElement } from 'react';
 import { Check } from './icons';
 import classes from './theme.module.css';
@@ -35,7 +35,17 @@ export const theme = createTheme({
     Input: Input.extend({ defaultProps: { size: 'sm' }, styles: (_theme, props) => ({ wrapper: props.variant === 'default' ? { '--input-bd': '#8a8a8a' } : {}, input: { fontSize: '14px', '--input-placeholder-color': '#767676' } }) }),
     InputWrapper: InputWrapper.extend({ styles: { label: { fontSize: '14px', color: '#595959', marginBottom: 6 } } }),
     Textarea: Textarea.extend({ styles: { input: { lineHeight: 1.8 } } }),
-    Modal: Modal.extend({ defaultProps: { centered: true, radius: 'lg', padding: 'lg', transitionProps: { transition: 'fade-down', duration: 200, timingFunction: 'ease-out' }, overlayProps: { backgroundOpacity: .3, blur: 2 }, closeButtonProps: { 'aria-label': '关闭' } }, styles: { title: { fontSize: '20px', fontWeight: 600 }, header: { borderBottom: '1px solid #eee', marginBottom: 20 } } }),
+    Modal: Modal.extend({
+      defaultProps: { centered: true, radius: 'lg', padding: 'lg', scrollAreaComponent: ScrollArea.Autosize, transitionProps: { transition: 'fade-down', duration: 200, timingFunction: 'ease-out' }, overlayProps: { backgroundOpacity: .3, blur: 2 }, closeButtonProps: { 'aria-label': '关闭' } },
+      styles: {
+        content: { overflow: 'hidden', border: 0 },
+        title: { fontSize: '20px', fontWeight: 600 },
+        header: { borderBottom: '1px solid #eee' },
+        body: { paddingTop: 'var(--mb-padding)' },
+      },
+    }),
+    // Modal content renders a Paper; prevent card padding from offsetting its scroll viewport.
+    ModalContent: Modal.Content.extend({ defaultProps: { p: 0 } }),
     Paper: Paper.extend({ defaultProps: { radius: 'lg', withBorder: true, shadow: 'xs', p: 'lg' }, styles: { root: { borderColor: '#eeeeee' } } }),
     NavLink: NavLink.extend({ defaultProps: { variant: 'light' }, styles: { root: { borderRadius: '8px', minHeight: 44 }, label: { fontSize: '14px' } } }),
     Badge: Badge.extend({ defaultProps: { variant: 'light', color: 'gray', size: 'lg' }, styles: { root: { fontSize: '12px', fontWeight: 500, textTransform: 'none' } } }),
