@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type TaskKind, type Workspace } from './domain';
+import { normalizeImageSelection } from './coverData';
 import { loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
 import { buildPrompt, prepareAnalysis, synthesisSteps } from './prompts';
 import { publishJobOutput } from './jobOutput';
-import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, writingStep } from './jobWorkflow';
+import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep, writingTarget } from './jobWorkflow';
 import { applyBestSkill, finishTrainingStep, initializeTraining, parseEvaluation, recordEvaluation, skillText, trainingPrompt, validateTraining } from './training';
 import { runnableJobs } from './taskQueue';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 import { runArticleCollection, runCollection } from './collectionTask';
+import { createCreationRound, creationContextKey, finishCreationRound, newCreationDraft, parseCreationOptions, projectFromCreation, selectCreationOption, selectedCreationOption, setCreationDirection } from './novelCreation';
+import { type CreationStage } from './novelCreationData';
+import { acceptPlanning, hasPlanningChanges, parsePlanningResult, planningSnapshot } from './planning';
+import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, undoNovel } from './novelAssistant';
 export { parseMemory } from './jobWorkflow';
 
-type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training'] };
+type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; targetWords?: number; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training']; planningChat?: boolean };
 export function useWorkspace() {
   const [state, setState] = useState<Workspace>(emptyWorkspace);
   const stateRef = useRef(state);
@@ -37,7 +42,7 @@ export function useWorkspace() {
         project.notes = project.notes.filter(n => n.chapterId !== chapter.id || !['fact', 'state', 'timeline', 'foreshadow', 'knowledge'].includes(n.kind));
       }
     }
-    next.aiSelection = normalizeAISelection(next.aiSelection, next.providers); next.updatedAt = now(); stateRef.current = next; setState(next); setSaveStatus('保存中');
+    next.aiSelection = normalizeAISelection(next.aiSelection, next.providers); next.imageSelection = normalizeImageSelection(next.imageSelection, next.imageProviders); next.updatedAt = now(); stateRef.current = next; setState(next); setSaveStatus('保存中');
   }, []);
   const setAISelection = useCallback((selection: AISelection) => update(s => { s.aiSelection = { ...selection }; }), [update]);
   useEffect(() => {
@@ -105,8 +110,8 @@ export function useWorkspace() {
           }
           await requests.run(config.providerId, signal, async () => {
             const effectiveKind = (step.stage && ['plan', 'draft', 'continue', 'rewrite', 'summary', 'memory'].includes(step.stage) ? step.stage : job.kind) as TaskKind;
-            const baseOutput = ['memory', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
-            const prompt = job.training ? trainingPrompt(job, step) : buildPrompt(current, { ...job, kind: effectiveKind }, { ...writingStep(job, step), output: baseOutput }, config);
+            const baseOutput = job.creationTask || job.planningChat || job.novelChat || ['memory', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
+            const prompt = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step) : buildPrompt(current, { ...job, kind: effectiveKind }, { ...writingStep(job, step), output: baseOutput }, config);
             if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('任务材料超过上下文上限，请调整 AI 上下文或缩小样本');
             let output = baseOutput, last = 0;
             const publish = () => {
@@ -121,14 +126,21 @@ export function useWorkspace() {
               signal.throwIfAborted();
               output = baseOutput + result;
               if (!output.trim()) throw new Error('生成结果为空');
+              const novelResult = job.novelChat ? parseNovelResult(output) : undefined;
+              if (novelResult) applyNovelResult(current.projects.find(project => project.id === job.projectId)!, novelResult);
+              const planningResult = job.planningChat ? parsePlanningResult(output) : undefined;
               if (effectiveKind === 'memory') parseMemory(output);
               if (effectiveKind === 'prepare' && !step.intermediate) parsePreparation(output);
               if (step.stage === 'train-judge') parseEvaluation(output, job.training!.cases.length);
+              const creationOptions = job.creationTask ? parseCreationOptions(output, job.creationTask.stage) : undefined;
               commit(s => {
                 const item = s.jobs.find(j => j.id === id), part = item?.steps.find(p => p.id === step.id);
                 if (item && part) {
                   part.output = output; part.status = 'ready';
-                  if (item.training) finishTrainingStep(item, part);
+                  if (creationOptions) finishCreationRound(s, item, creationOptions);
+                  else if (novelResult && !hasNovelChanges(novelResult)) part.status = 'accepted';
+                  else if (planningResult && !hasPlanningChanges(planningResult)) part.status = 'accepted';
+                  else if (item.training) finishTrainingStep(item, part);
                   else finishAutomaticStep(s, item, part);
                 }
               });
@@ -145,21 +157,39 @@ export function useWorkspace() {
   }, [update, requests]);
   const launch = useCallback((options: Launch): string => {
     const current = stateRef.current;
-    if ((options.instruction?.length ?? 0) > 8000) throw new Error('任务要求超过 8000 字符');
-    const project = current.projects.find(p => p.id === options.projectId);
+    const limit = options.kind === 'revise' ? 100000 : 8000;
+    if ((options.instruction?.length ?? 0) > limit) throw new Error(`任务要求超过 ${limit} 字符`);
+    const { project, chapterIds, addedChapter } = writingTarget(current.projects.find(p => p.id === options.projectId), options.kind, options.chapterIds ?? []);
+    const promptState = addedChapter ? { ...current, projects: current.projects.map(p => p.id === project!.id ? project! : p) } : current;
     const config = resolveAI(current.aiSelection, current.providers);
     if (options.chapterIds?.length && (!project || options.chapterIds.some(id => !project.chapters.some(c => c.id === id)))) throw new Error('章节已移除');
-    const job = createJob(project, options.kind, config, options.chapterIds ?? [], options.instruction ?? '', options.styleId, options.sourceId, options.selection);
+    const job = createJob(project, options.kind, config, chapterIds, options.instruction ?? '', options.styleId, options.sourceId, options.selection);
     const source = current.references.find(r => r.id === options.sourceId);
     job.sourceText = options.sourceText ?? source?.content ?? ''; job.sourceTitle = options.sourceTitle ?? source?.title ?? project?.title ?? '';
     if (['analyze', 'scan', 'style'].includes(job.kind) && !job.sourceText && !job.steps.some(s => s.baseContent.trim())) throw new Error('暂无可分析的正文');
     if (['memory', 'review'].includes(job.kind) && !job.steps.some(s => s.baseContent.trim())) throw new Error('请先添加小说正文');
-    if (['prepare', 'draft', 'continue', 'rewrite', 'plan'].includes(job.kind)) requirePreparation(project);
+    if (['revise', 'prepare', 'draft', 'continue', 'rewrite', 'plan'].includes(job.kind)) requirePreparation(project);
+    if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
+      requireIdleWriting(current.jobs, job.projectId, chapterIds);
+      if (options.targetWords !== undefined && (!Number.isInteger(options.targetWords) || options.targetWords < 100 || options.targetWords > 50000)) throw new Error('目标字数须为 100 至 50000');
+      job.targetWords = options.targetWords;
+    }
     if (job.kind === 'prepare' && project) {
       job.preparationBase = preparationSnapshot(project);
       job.sourceText = current.references.filter(r => project.referenceIds.includes(r.id)).map(r => `${r.title}\n${r.content}`).join('\n\n');
     }
+    if (options.planningChat && job.kind === 'plan' && project && !options.chapterIds?.length) {
+      if (current.jobs.some(value => value.projectId === project.id && value.planningChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
+      job.planningChat = { base: planningSnapshot(project), previousJobIds: current.jobs.filter(value => value.projectId === project.id && value.planningChat && ['ready', 'accepted'].includes(value.status)).reverse().map(value => value.id) };
+      buildPrompt(current, job, job.steps[0], config);
+    }
     job.skillIds = [...(project?.skillIds ?? [])];
+    if (job.kind === 'revise' && project) {
+      if (options.chapterIds?.length) throw new Error('小说 AI 按整本小说调整');
+      if (current.jobs.some(value => value.projectId === project.id && value.novelChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
+      job.novelChat = { base: novelSnapshot(project), previousJobIds: current.jobs.filter(value => value.projectId === project.id && value.novelChat && ['ready', 'accepted'].includes(value.status)).slice(0, 6).reverse().map(value => value.id) };
+      buildPrompt(current, job, job.steps[0], config);
+    }
     if (job.kind === 'train') {
       if (!options.training) throw new Error('请选择 Skill 和评分原文');
       const skill = current.skills.find(s => s.id === options.training!.skillId);
@@ -170,10 +200,75 @@ export function useWorkspace() {
       job.training = validateTraining(job.training);
       job.sourceText = ''; // Originals are isolated from writers; scenario generation, evaluation and revision use explicit prompts.
       initializeTraining(job);
-    } else { prepareAnalysis(job, config); prepareWriting(job); }
+    } else {
+      prepareAnalysis(job, config); prepareWriting(job);
+      if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
+        for (const step of job.steps.filter(step => ['plan', 'draft', 'continue', 'rewrite'].includes(step.stage ?? ''))) buildPrompt(promptState, { ...job, kind: step.stage as TaskKind }, writingStep(job, step), config);
+      }
+    }
     job.status = 'queued';
-    update(s => { s.jobs.unshift(job); }); notify('任务已添加'); return job.id;
+    update(s => {
+      if (addedChapter) { const target = s.projects.find(p => p.id === project!.id)!; target.chapters.push(addedChapter); target.updatedAt = now(); }
+      s.jobs.unshift(job);
+    }); notify('任务已添加'); return job.id;
   }, [notify, update]);
+  const requireIdleCreation = (current: Workspace) => {
+    if (current.creationDraft && current.jobs.some(job => job.creationTask?.draftId === current.creationDraft!.id && ['queued', 'running'].includes(job.status))) throw new Error('请等待生成完成或停止生成');
+  };
+  const startNovelCreation = useCallback((genre: string, idea: string) => {
+    const current = stateRef.current; requireIdleCreation(current);
+    if (current.creationDraft && current.creationDraft.stage !== 'genre') throw new Error('已有新建小说草稿');
+    const draft = current.creationDraft ? structuredClone(current.creationDraft) : newCreationDraft(genre, idea);
+    if (current.creationDraft) setCreationDirection(draft, genre, idea);
+    const job = createCreationRound(current, draft, '生成三个核心设定方案。');
+    update(s => { s.creationDraft = draft; s.jobs.unshift(job); });
+  }, [update]);
+  const discardNovelCreation = useCallback(() => {
+    const current = stateRef.current; requireIdleCreation(current);
+    const draftId = current.creationDraft?.id;
+    if (!draftId) return;
+    update(s => { s.creationDraft = undefined; s.jobs = s.jobs.filter(job => job.creationTask?.draftId !== draftId); });
+  }, [update]);
+  const generateNovelOptions = useCallback((instruction: string) => {
+    const current = stateRef.current; requireIdleCreation(current);
+    if (!current.creationDraft) throw new Error('新建小说草稿已移除');
+    const draft = structuredClone(current.creationDraft);
+    const job = createCreationRound(current, draft, instruction);
+    update(s => { s.creationDraft = draft; s.jobs.unshift(job); });
+  }, [update]);
+  const selectNovelOption = useCallback((id: string) => {
+    requireIdleCreation(stateRef.current);
+    update(s => { if (!s.creationDraft) throw new Error('新建小说草稿已移除'); selectCreationOption(s.creationDraft, id); });
+  }, [update]);
+  const advanceNovelCreation = useCallback(() => {
+    const current = stateRef.current; requireIdleCreation(current);
+    if (!current.creationDraft) throw new Error('新建小说草稿已移除');
+    const draft = structuredClone(current.creationDraft);
+    if (!selectedCreationOption(draft, draft.stage)) throw new Error('请选择方案');
+    if (draft.stage !== 'core') throw new Error('请先选择核心设定');
+    draft.stage = 'outline';
+    const job = createCreationRound(current, draft, '生成三个总纲方案，包含人物与分卷。');
+    update(s => { s.creationDraft = draft; s.jobs.unshift(job); });
+  }, [update]);
+  const backNovelCreation = useCallback((stage: CreationStage) => {
+    const current = stateRef.current; requireIdleCreation(current);
+    if (!current.creationDraft || ['genre', 'core', 'outline'].indexOf(stage) >= ['genre', 'core', 'outline'].indexOf(current.creationDraft.stage)) return;
+    update(s => { s.creationDraft!.stage = stage; });
+  }, [update]);
+  const finishNovelCreation = useCallback(() => {
+    const current = stateRef.current; requireIdleCreation(current);
+    if (!current.creationDraft || current.creationDraft.stage !== 'outline') throw new Error('请先选择总纲');
+    const project = projectFromCreation(current.creationDraft);
+    const draftId = current.creationDraft.id;
+    update(s => {
+      s.projects.unshift(project); s.activeProjectId = project.id; s.creationDraft = undefined;
+      s.jobs.filter(job => job.creationTask?.draftId === draftId).forEach(job => {
+        job.projectId = project.id;
+        if (job.status === 'ready') { job.status = 'accepted'; job.steps.forEach(step => { step.status = 'accepted'; }); }
+      });
+    });
+    return project.id;
+  }, [update]);
   const memoryKey = JSON.stringify([state.aiSelection, state.providers.map(p => [p.id, p.enabled, p.models]), state.projects.map(p => [p.id, p.chapters.map(c => [c.id, contentHash(c.content), c.memoryHash])]), state.jobs.filter(j => ['draft', 'continue', 'rewrite'].includes(j.kind) && ['running', 'queued'].includes(j.status)).map(j => j.id)]);
   useEffect(() => {
     if (!loaded) return;
@@ -227,11 +322,30 @@ export function useWorkspace() {
       const current = stateRef.current;
       const job = current.jobs.find(j => j.id === id);
       if (!job || !['paused', 'failed'].includes(job.status)) return;
+      if (['draft', 'continue', 'rewrite'].includes(job.kind)) requireIdleWriting(current.jobs, job.projectId, job.steps.map(step => step.chapterId), id);
+      if (job.novelChat && current.jobs.some(value => value.id !== id && value.projectId === job.projectId && value.novelChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
+      if (job.planningChat && current.jobs.some(value => value.id !== id && value.projectId === job.projectId && value.planningChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
+      if (job.creationTask) {
+        const draft = current.creationDraft, round = draft?.rounds.find(round => round.id === job.creationTask!.roundId);
+        if (!draft || draft.id !== job.creationTask.draftId || draft.stage !== job.creationTask.stage || !round || round.contextKey !== creationContextKey(draft, draft.stage)) throw new Error('该轮次已结束，请在当前步骤重新生成');
+        requireIdleCreation(current);
+      }
       const config = job.collectionTask || job.articleTask ? null : resolveAI(current.aiSelection, current.providers);
       update(s => {
         const item = s.jobs.find(j => j.id === id)!;
         item.ai = config; item.status = 'queued'; item.error = '';
-        if (restart) item.steps.forEach(step => { if (step.status === 'pending') step.output = ''; });
+        if (item.novelChat) {
+          const project = s.projects.find(value => value.id === item.projectId);
+          if (!project) throw new Error('小说已移除');
+          item.novelChat.base = novelSnapshot(project);
+          item.steps.forEach(step => { step.output = ''; });
+        }
+        if (item.planningChat) {
+          const project = s.projects.find(value => value.id === item.projectId);
+          if (!project) throw new Error('小说已移除');
+          item.planningChat.base = planningSnapshot(project);
+        }
+        if (restart || item.creationTask) item.steps.forEach(step => { if (step.status === 'pending') step.output = ''; });
         if (config && item.kind === 'prepare') prepareAnalysis(item, config);
       });
 
@@ -247,12 +361,17 @@ export function useWorkspace() {
       update(s => {
         const job = s.jobs.find(j => j.id === jobId); const step = job?.steps.find(p => p.id === stepId);
         if (!job || !step || step.status !== 'ready' || step.intermediate) throw new Error('结果尚未完成');
+        if (job.creationTask) throw new Error('请在新建小说中选择方案');
         const project = s.projects.find(p => p.id === job.projectId);
         const chapter = project?.chapters.find(c => c.id === step.chapterId);
         if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
           acceptWriting(s, job, step);
+        } else if (job.novelChat) {
+          acceptNovel(s, job);
         } else if (job.kind === 'prepare') {
           acceptPreparation(s, job, step);
+        } else if (job.planningChat) {
+          acceptPlanning(s, job, step);
         } else if (job.kind === 'plan') {
           if (!project) throw new Error('小说已移除');
           if (chapter) { if (chapter.plan !== step.basePlan) throw new Error('细纲已更新，请手动合并'); chapter.plan = step.output; }
@@ -277,13 +396,17 @@ export function useWorkspace() {
       notify('已采用');
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
   }, [notify, update]);
+  const undoNovelAdjustment = useCallback((id: string) => {
+    try { update(state => { const job = state.jobs.find(value => value.id === id); if (!job) throw new Error('任务已移除'); undoNovel(state, job); }); notify('已撤销调整'); }
+    catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  }, [update, notify]);
   const replace = useCallback(async (workspace: Workspace) => {
     await refreshCredentials(workspace);
     generation.current++; controllers.current.forEach(c => c.abort()); controllers.current.clear();
     stateRef.current = workspace; setState(workspace); setLoaded(true); setLoadError(''); setSaveStatus('保存中');
     await saveWorkspace(workspace); if (stateRef.current === workspace) setSaveStatus('已保存');
   }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, collect, collectArticles, scoreTraining, stop, resumeJob, accept, replace };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, stop, resumeJob, accept, undoNovelAdjustment, replace };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };

@@ -62,11 +62,11 @@ export function trainingPrompt(job: Job, part: JobStep) {
   }
   if (part.stage === 'train-judge') {
     const samples = training.cases.map((c, i) => ({ scenario: c.brief, reference: i === 0 ? trainingOriginal(training) : c.original, candidate: job.steps.find(s => s.stage === 'train-write' && s.round === round && s.caseIndex === i)?.output ?? '' }));
-    return { system, user: `独立评审以下训练样本。第一个样本的原文为所有场景共同的 10 分质量基准；每个场景评分 0–10，按因果与人物动机、冲突升级、节奏与情绪回报、表达质量、场景适配综合评分。迁移场景按原文的质量标准衡量，不要求复用剧情。照抄句子、角色和设定要扣分。不能因为迎合要求而虚高评分。指出可迁移的缺陷，并决定 revise（局部改规则）、reextract（从原文重新提炼）或 keep。仅输出 JSON：{"scores":[每个场景的分数],"feedback":"具体证据和改进方向","decision":"revise|reextract|keep"}。\n${JSON.stringify(samples)}` };
+    return { system, user: `独立评审以下训练样本。第一个样本的原文为所有场景共同的 10 分质量基准；每个场景评分 0–10，按因果与人物动机、冲突升级、节奏与情绪回报、表达质量、场景适配综合评分。单独检验原文的阅读乐趣是否保留：喜剧须指出实际笑点与落点，悬疑须指出悬念体验；对话须区分人物口吻、潜台词与机械问答。结构完整但口吻平庸、人物只负责讲解设定，不能判为达到原文质量。迁移场景按原文的质量标准衡量，不要求复用剧情。照抄句子、角色和设定要扣分。不能因为迎合要求而虚高评分。指出可迁移的缺陷，并决定 revise（局部改规则）、reextract（从原文重新提炼）或 keep。仅输出 JSON：{"scores":[每个场景的分数],"feedback":"具体证据和改进方向","decision":"revise|reextract|keep"}。\n${JSON.stringify(samples)}` };
   }
   const evaluation = training.evaluations.find(e => e.round === round);
   const action = evaluation?.decision === 'auto' ? '根据用户评分与原文自行判断局部修订还是重新提炼，并优化' : evaluation?.decision === 'reextract' ? '重新从原文提炼' : '修订';
-  return { system, user: `${action}通用小说 Skill。必须保留跨题材的叙事机制、表达规律、适用条件、执行步骤、自检和反例。禁止写入原作人物名、原文语句、具体章节情节、测试场景及参考答案；不得按某一次测试定制规则。只输出完整 SKILL.md，含 name、description 元数据。\n现有 Skill：\n${rules}\n各场景评分：\n${evaluation?.scores.join('、')} / 10\n评审：\n${evaluation?.feedback}\n参考原文：\n${[trainingOriginal(training), ...training.cases.slice(1).map(c => c.original)].filter(Boolean).join('\n\n')}` };
+  return { system, user: `${action}通用小说 Skill。保留有证据的叙事机制，以及原文可辨认的口吻、对白、幽默或其他情绪节拍。将具体写法与反例放在前面，通用因果清单只作简要补充；题材专属写法注明适用条件，不因无法适用所有题材而删除。禁止写入原作人物名、原文语句、具体章节情节、测试场景及参考答案；不得按某一次测试定制规则。只输出完整 SKILL.md，含 name、description 元数据。\n现有 Skill：\n${rules}\n各场景评分：\n${evaluation?.scores.join('、')} / 10\n评审：\n${evaluation?.feedback}\n参考原文：\n${[trainingOriginal(training), ...training.cases.slice(1).map(c => c.original)].filter(Boolean).join('\n\n')}` };
 }
 export function recordEvaluation(job: Job, part: JobStep, evaluation: z.infer<typeof evaluationSchema>, source: 'ai' | 'human') {
   const training = job.training!;

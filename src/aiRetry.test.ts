@@ -62,6 +62,12 @@ describe('AI 请求恢复', () => {
     expect(http).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
+  it('拒绝钥匙串访问后不会自动重试并反复弹出授权', async () => {
+    vi.mocked(http).mockRejectedValue('读取密钥失败：用户拒绝访问');
+    await expect(run()).rejects.toBe('读取密钥失败：用户拒绝访问');
+    expect(http).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it('重试逐渐延后，等待时间不超过 10 秒', async () => {
     const times: number[] = [];
     vi.mocked(http).mockImplementation(async () => { times.push(Date.now()); throw new Error('失败'); });
@@ -85,14 +91,41 @@ describe('AI 请求恢复', () => {
 });
 
 describe('流式重试与停止', () => {
-  it('连接中断后重新生成，清除旧片段并忽略旧连接的迟到事件', async () => {
+  it('连接中断后重新生成，用新正文替换旧片段并忽略迟到事件', async () => {
     const onText = vi.fn();
     let stale: ((text: string) => void) | undefined;
     vi.mocked(http).mockImplementationOnce(async request => { stale = request.onChunk; request.onChunk?.(event('旧片段')); return response(); }).mockImplementationOnce(async request => { stale?.(event('迟到片段')); request.onChunk?.(event('完整正文') + 'data: [DONE]\n\n'); return response(); });
     const finished = run(provider(), new AbortController(), onText);
     await vi.runAllTimersAsync();
     expect(await finished).toBe('完整正文');
-    expect(onText.mock.calls.map(([text]) => text)).toEqual(['旧片段', '', '完整正文']);
+    expect(onText.mock.calls.map(([text]) => text)).toEqual(['旧片段', '完整正文']);
+  });
+  it('后续重试无正文时保留此前片段，供任务继续生成', async () => {
+    const onText = vi.fn();
+    vi.mocked(http).mockImplementationOnce(async request => { request.onChunk?.(event('可恢复正文')); throw new Error('断线'); }).mockRejectedValue(new Error('服务暂时不可用'));
+    const finished = expect(run(provider(2), new AbortController(), onText)).rejects.toThrow('服务暂时不可用');
+    await vi.runAllTimersAsync();
+    await finished;
+    expect(http).toHaveBeenCalledTimes(3);
+    expect(onText.mock.calls.map(([text]) => text)).toEqual(['可恢复正文']);
+  });
+  it('完整响应恢复尚未送达的末尾流事件，不误判断线或重试', async () => {
+    const onText = vi.fn();
+    vi.mocked(http).mockImplementationOnce(async request => {
+      request.onChunk?.(event('开头'));
+      return response(event('开头') + event('结尾') + 'data: [DONE]\n\n');
+    });
+    expect(await run(provider(), new AbortController(), onText)).toBe('开头结尾');
+    expect(http).toHaveBeenCalledTimes(1);
+    expect(onText.mock.calls.map(([text]) => text)).toEqual(['开头', '开头结尾']);
+  });
+  it('完整响应中的输出上限不会被未送达的流事件掩盖', async () => {
+    vi.mocked(http).mockImplementationOnce(async request => {
+      request.onChunk?.(event('片段'));
+      return response(event('片段') + 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n');
+    });
+    await expect(run()).rejects.toThrow('输出上限');
+    expect(http).toHaveBeenCalledTimes(1);
   });
   it.each(['chat', 'responses', 'anthropic', 'gemini'] as const)('%s 流式错误事件也可重试', async protocol => {
     const errors = { chat: { error: { message: '服务繁忙', code: 'server_error' } }, responses: { type: 'response.failed', response: { error: { message: '服务繁忙', code: 'server_error' } } }, anthropic: { type: 'error', error: { type: 'overloaded_error', message: '服务繁忙' } }, gemini: { error: { code: 503, status: 'UNAVAILABLE', message: '服务繁忙' } } };

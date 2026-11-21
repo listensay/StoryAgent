@@ -78,7 +78,7 @@ export function Research({ store, onSettings, initialTask = 'scan', focusJobId }
           <Group pt="xs"><Button primary icon={Sparkles} disabled={!reference.content.trim() || !ai.providerId || !ai.model} onClick={() => launch(reference, task === 'scan' || scope === 'full' ? reference.content : chapters[scope === 'opening' ? 0 : Number(chapterIndex)]?.content ?? '')}>开始分析</Button></Group>
         </>}
       </Stack></Paper>
-      {store.state.jobs.filter(j => relatedIds.has(j.sourceId)).map(j => <JobCard key={j.id} job={j} store={store} />)}
+      {store.state.jobs.filter(j => relatedIds.has(j.sourceId)).reverse().map(j => <JobCard key={j.id} job={j} store={store} />)}
     </>}
   </Stack>
     <ModalPresence>{remove && <Confirm title="删除资料" content={`确认删除「${remove.title}」？`} onClose={() => setRemove(undefined)} onConfirm={() => store.update(s => { s.references = s.references.filter(r => r.id !== remove.id); })} />}</ModalPresence>

@@ -1,0 +1,16 @@
+.character-graph {
+  border: 1px solid var(--mantine-color-gray-2);
+  border-radius: var(--mantine-radius-lg);
+  overflow: hidden;
+  background: #fcfcfc;
+  --xy-font-family: var(--mantine-font-family);
+}
+.character-node { width: 160px; height: 80px; border: 1px solid var(--mantine-color-gray-3); }
+.character-name { display: block; font-size: 16px; line-height: 24px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+.character-name:focus-visible { outline: 2px solid var(--mantine-color-story-7); outline-offset: 2px; border-radius: 4px; }
+.character-graph .react-flow__handle { opacity: 0; pointer-events: none; }
+.character-graph .react-flow__edge:focus-visible { outline: none; }
+.character-graph .react-flow__edge:focus-visible .react-flow__edge-path { stroke-width: 3; }
+.character-graph .react-flow__edge.selected .react-flow__edge-path { stroke-width: 3; }
+.character-graph .react-flow__edge-textwrapper { pointer-events: all; cursor: pointer; }
+.character-graph .react-flow__attribution { font-size: 12px; }

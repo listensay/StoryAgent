@@ -1,20 +1,23 @@
 import { z } from 'zod';
+import novelAssistantSkill from './skills/novel-assistant/SKILL.md?raw';
 import { collectionSchema } from './researchSources';
 import { rankingSchema } from './rankings';
 import { BOOK_SEARCH_HISTORY_LIMIT } from './bookSearch';
 import { articleRuleSchema, articlePageSchema, defaultArticleRule, defaultArticleRules, ixdzsArticleRule } from './articleRules';
+import { creationDraftSchema, creationTaskSchema } from './novelCreationData';
+import { coverDraftSchema, coverOptionsSchema, defaultCoverOptions, imageConfigSchema, imageProviderSchema, imageSelectionSchema, normalizeImageSelection } from './coverData';
 
 export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
-export const taskNames = { draft: '起草', continue: '续写', rewrite: '改写', review: '审稿', plan: '故事规划', memory: '提取记忆', scan: '扫榜选题', analyze: '拆文', style: '提取 Skill', prepare: '完善创作准备', summary: '生成摘要', train: 'Skill 训练', collect: '采集正文' } as const;
+export const taskNames = { revise: '小说 AI', draft: '起草', continue: '续写', rewrite: '改写', review: '审稿', plan: '故事规划', memory: '提取记忆', scan: '扫榜选题', analyze: '拆文', style: '提取 Skill', prepare: '完善创作准备', summary: '生成摘要', train: 'Skill 训练', collect: '采集正文' } as const;
 export type TaskKind = keyof typeof taskNames;
 export const noteNames = { character: '人物', relation: '人物关系', world: '世界设定', volume: '卷纲', scene: '场景', branch: '情节分支', fact: '正文事实', state: '人物状态', timeline: '时间线', foreshadow: '伏笔', knowledge: '知情状态', reference: '参考资料' } as const;
 export type NoteKind = keyof typeof noteNames;
 const taskSchema = z.enum(Object.keys(taskNames) as [TaskKind, ...TaskKind[]]);
-const noteSchema = z.object({ id: z.string(), kind: z.enum(Object.keys(noteNames) as [NoteKind, ...NoteKind[]]), title: z.string(), body: z.string(), chapterId: z.string().default(''), status: z.enum(['confirmed', 'planned', 'reference']).default('planned') });
+const noteSchema = z.object({ id: z.string(), kind: z.enum(Object.keys(noteNames) as [NoteKind, ...NoteKind[]]), title: z.string(), body: z.string(), chapterId: z.string().default(''), status: z.enum(['confirmed', 'planned', 'reference']).default('planned'), relation: z.object({ sourceId: z.string(), targetId: z.string() }).optional(), graphPosition: z.object({ x: z.number().finite(), y: z.number().finite() }).optional() });
 const versionSchema = z.object({ id: z.string(), content: z.string(), createdAt: z.string(), label: z.string() });
 const chapterSchema = z.object({ id: z.string(), title: z.string(), plan: z.string(), content: z.string(), summary: z.string(), memoryHash: z.string().optional(), styleId: z.string().default(''), versions: z.array(versionSchema), updatedAt: z.string() });
-const projectSchema = z.object({ id: z.string(), title: z.string(), form: z.enum(['long', 'short']), genre: z.string(), theme: z.string(), audience: z.string(), targetWords: z.number().nonnegative(), synopsis: z.string(), outline: z.string(), styleId: z.string(), referenceIds: z.array(z.string()).default([]), skillIds: z.array(z.string()).default([]), chapters: z.array(chapterSchema), notes: z.array(noteSchema), createdAt: z.string(), updatedAt: z.string() });
+const projectSchema = z.object({ id: z.string(), title: z.string(), form: z.enum(['long', 'short']), genre: z.string(), theme: z.string(), audience: z.string(), targetWords: z.number().nonnegative(), synopsis: z.string(), outline: z.string(), cover: z.string().default(''), coverDraft: coverDraftSchema.optional(), styleId: z.string(), referenceIds: z.array(z.string()).default([]), skillIds: z.array(z.string()).default([]), chapters: z.array(chapterSchema), notes: z.array(noteSchema), createdAt: z.string(), updatedAt: z.string() });
 const advancedSchema = z.object({ temperature: z.number().min(0).max(2), sampling: z.boolean(), maxTokens: z.number().int().min(256).max(200000), contextChars: z.number().int().min(4000).max(500000), extra: z.string() });
 export const defaultAdvanced = (): z.infer<typeof advancedSchema> => ({ temperature: 0.8, sampling: false, maxTokens: 8192, contextChars: 64000, extra: '{}' });
 export const DEFAULT_AI_RETRIES = 10;
@@ -37,8 +40,8 @@ export const trainingSchema = z.object({
 }).refine(value => value.cases.length >= 2 || (value.cases.length === 0 && !!value.original?.trim()), { message: '训练需要评分原文及至少两个场景' });
 const collectionTaskSchema = z.object({ bookUrl: z.string(), title: z.string(), scope: z.enum(['opening', 'chapter', 'available']), chapterId: z.string(), rule: articleRuleSchema.optional(), referenceId: z.string(), done: z.number().default(0), total: z.number().default(0) });
 const articleTaskSchema = z.object({ url: z.string(), rule: articleRuleSchema, mode: z.enum(['catalog', 'chapter', 'range']), page: articlePageSchema.optional(), links: z.array(z.object({ title: z.string(), url: z.string() })), referenceId: z.string(), done: z.number().int().nonnegative().default(0), total: z.number().int().nonnegative().default(0) });
-const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, ai: aiConfigSchema.nullable(), styleId: z.string(), instruction: z.string(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['queued', 'running', 'paused', 'failed', 'ready', 'accepted', 'waiting']), error: z.string(), steps: z.array(stepSchema), preparationBase: z.string().optional(), skillIds: z.array(z.string()).optional(), training: trainingSchema.optional(), collectionTask: collectionTaskSchema.optional(), articleTask: articleTaskSchema.optional(), createdAt: z.string() });
-export const workspaceSchema = z.object({ schemaVersion: z.literal(2), projects: z.array(projectSchema), providers: z.array(providerSchema), aiSelection: selectionSchema.default(newAISelection), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), articleRules: z.array(articleRuleSchema).default(() => structuredClone(defaultArticleRules)), articleRulesRevision: z.number().int().nonnegative().default(0), bookSearchHistory: z.array(z.string().trim().min(1).max(100)).max(BOOK_SEARCH_HISTORY_LIMIT).default([]), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
+const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, ai: aiConfigSchema.nullable(), styleId: z.string(), instruction: z.string(), targetWords: z.number().int().min(100).max(50000).optional(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['queued', 'running', 'paused', 'failed', 'ready', 'accepted', 'waiting']), error: z.string(), steps: z.array(stepSchema), preparationBase: z.string().optional(), novelChat: z.object({ previousJobIds: z.array(z.string()), base: z.string(), before: z.string().optional(), appliedBase: z.string().optional(), undone: z.boolean().optional() }).optional(), planningChat: z.object({ previousJobIds: z.array(z.string()), base: z.string() }).optional(), skillIds: z.array(z.string()).optional(), training: trainingSchema.optional(), collectionTask: collectionTaskSchema.optional(), articleTask: articleTaskSchema.optional(), creationTask: creationTaskSchema.optional(), createdAt: z.string() });
+export const workspaceSchema = z.object({ schemaVersion: z.literal(2), projects: z.array(projectSchema), providers: z.array(providerSchema), imageProviders: z.array(imageProviderSchema).default([]), imageSelection: imageSelectionSchema.default({ providerId: '', model: '' }), coverOptions: coverOptionsSchema.default(defaultCoverOptions), aiSelection: selectionSchema.default(newAISelection), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), articleRules: z.array(articleRuleSchema).default(() => structuredClone(defaultArticleRules)), articleRulesRevision: z.number().int().nonnegative().default(0), bookSearchHistory: z.array(z.string().trim().min(1).max(100)).max(BOOK_SEARCH_HISTORY_LIMIT).default([]), creationDraft: creationDraftSchema.optional(), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
 const legacyWorkspaceSchema = workspaceSchema.extend({ schemaVersion: z.literal(1), profiles: z.array(legacyProfileSchema), jobs: z.array(jobSchema.omit({ ai: true }).extend({ profileId: z.string() })) });
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type Project = z.infer<typeof projectSchema>;
@@ -55,6 +58,7 @@ export type JobStep = z.infer<typeof stepSchema>;
 
 const builtin = (name: string, description: string, tasks: TaskKind[], content: string): Skill => ({ id: `builtin-${tasks[0]}`, name, description, tasks, source: '内置', version: '1.0', enabled: true, builtin: true, files: [{ path: 'SKILL.md', content }], revisions: [] });
 export const builtinSkills = [
+  builtin('小说 AI', '统一调整小说信息、人物、世界设定与故事规划', ['revise'], novelAssistantSkill),
   builtin('小说创作', '人物动机、场景推进与自然表达', ['draft', 'continue', 'rewrite'], '用人物的目标、阻碍和选择推进故事。场景应有清晰的视角、地点与行动。人物语言服从身份和情境，避免同质对话。用具体动作和细节表现情绪。长短句和段落随事件变化，不机械套用固定结构。不要为了制造悬念违反人物知情范围。章节结尾落在动作、画面或台词上。遵守已经确认的设定与正文，不擅自回收未计划的伏笔。仅输出小说正文。'),
   builtin('故事规划', '主题、人物弧线与情节因果', ['plan'], '从主题、读者预期、主角目标、阻力和代价出发设计故事。用因果关系组织事件，区分全书、卷、章节和场景层级。列出关键转折、人物变化、伏笔与回收。短篇围绕集中冲突，长篇允许多线但保持主线推进。未确定信息给出可选方案，不能当成既定事实。避免强制套用固定套路。'),
   builtin('审稿与连续性', '正文质量、逻辑和跨章一致性', ['review', 'memory'], '审稿检查人物动机、因果、时空、人物位置、持有物、知情状态、语气、伏笔和重复表达。指出问题时引用原文并说明影响，区分事实矛盾与表达建议。提取记忆仅依据已提供正文，禁止把计划或参考当成已发生事件。'),
@@ -62,9 +66,17 @@ export const builtinSkills = [
   builtin('文本拆解', '结构、节奏与写作手法', ['analyze'], '依据原文逐段辨认人物、事件、情绪变化、伏笔和表达手法。用结构解释阅读效果，给出可迁移的方法而不是复用原文情节。引用必须准确，标明段落编号；找不到证据的结论应舍弃。'),
   builtin('Skill 提炼', '提取叙事机制与表达规则', ['style'], '提取可执行的叙事机制：开篇钩子、人物欲望、冲突升级、信息差、情绪回报、反转、章节节奏、叙述视角、句法与对话。区分通用规律和题材适用条件，给出步骤、自检和反例。不得包含原作人物、专有设定、原文句子或特定章节答案。'),
 ];
-export const emptyWorkspace = (): Workspace => ({ schemaVersion: 2, projects: [], providers: [], aiSelection: newAISelection(), skills: structuredClone(builtinSkills), styles: [], references: [], articleRules: structuredClone(defaultArticleRules), articleRulesRevision: 1, bookSearchHistory: [], jobs: [], activeProjectId: '', updatedAt: now() });
+export const emptyWorkspace = (): Workspace => ({ schemaVersion: 2, projects: [], providers: [], imageProviders: [], imageSelection: { providerId: '', model: '' }, coverOptions: defaultCoverOptions(), aiSelection: newAISelection(), skills: structuredClone(builtinSkills), styles: [], references: [], articleRules: structuredClone(defaultArticleRules), articleRulesRevision: 1, bookSearchHistory: [], jobs: [], activeProjectId: '', updatedAt: now() });
 export function parseWorkspace(raw: string): Workspace {
   let input = JSON.parse(raw);
+  if (input?.imageConfig) {
+    const { model, size, quality, ...provider } = imageConfigSchema.parse(input.imageConfig);
+    input.imageProviders = [...(input.imageProviders ?? [])];
+    if (!input.imageProviders.some((value: { id: string }) => value.id === provider.id)) input.imageProviders.push({ ...provider, name: 'OpenAI GPT Image', models: [model], enabled: true });
+    input.imageSelection ??= { providerId: provider.id, model };
+    input.coverOptions ??= { size, quality };
+    delete input.imageConfig;
+  }
   const restoreAISelection = input?.aiSelection === undefined;
   let legacySelections: AISelection[] = [];
   if (input?.schemaVersion === 1) {
@@ -83,12 +95,14 @@ export function parseWorkspace(raw: string): Workspace {
     };
   }
   const data = workspaceSchema.parse(input);
+  data.skills = [structuredClone(builtinSkills[0]), ...data.skills.filter(skill => skill.id !== 'builtin-revise')];
   if (restoreAISelection) {
     const selections: (AISelection | null)[] = [...[...data.jobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => job.ai), ...legacySelections];
     const previous = selections.find(selection => selection && data.providers.some(provider => provider.id === selection.providerId && provider.enabled && provider.models.includes(selection.model)));
     if (previous) data.aiSelection = selectionSchema.parse(previous);
   }
   data.aiSelection = normalizeAISelection(data.aiSelection, data.providers);
+  data.imageSelection = normalizeImageSelection(data.imageSelection, data.imageProviders);
   if (data.articleRulesRevision < 1) {
     if (!data.articleRules.some(r => r.id === ixdzsArticleRule.id || /^https:\/\/ixdzs8\.com\/?$/.test(r.siteUrl))) data.articleRules.push(structuredClone(ixdzsArticleRule));
     const original = data.articleRules.find(r => r.id === defaultArticleRule.id && r.siteUrl === defaultArticleRule.siteUrl);
@@ -109,7 +123,7 @@ export function parseWorkspace(raw: string): Workspace {
 }
 export const newChapter = (title = '第一章'): Chapter => ({ id: uid(), title, plan: '', content: '', summary: '', styleId: '', versions: [], updatedAt: now() });
 export function newProject(title: string, form: Project['form']): Project {
-  return { id: uid(), title: title.trim() || '未命名小说', form, genre: '', theme: '', audience: '', targetWords: form === 'long' ? 300000 : 10000, synopsis: '', outline: '', styleId: '', referenceIds: [], skillIds: [], chapters: [newChapter(form === 'long' ? '第一章' : '正文')], notes: [], createdAt: now(), updatedAt: now() };
+  return { id: uid(), title: title.trim() || '未命名小说', form, genre: '', theme: '', audience: '', targetWords: form === 'long' ? 300000 : 10000, synopsis: '', outline: '', cover: '', styleId: '', referenceIds: [], skillIds: [], chapters: [newChapter(form === 'long' ? '第一章' : '正文')], notes: [], createdAt: now(), updatedAt: now() };
 }
 export const wordCount = (s: string) => (s.match(/[\p{Script=Han}]|[\p{L}\p{N}]+/gu) ?? []).length;
 export const projectWords = (p: Project) => p.chapters.reduce((total, c) => total + wordCount(c.content), 0);

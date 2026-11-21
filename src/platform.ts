@@ -12,9 +12,9 @@ export async function loadWorkspace(): Promise<Workspace> {
   return state;
 }
 export async function refreshCredentials(state: Workspace) {
-  await Promise.all(state.providers.map(async p => {
+  await Promise.all([...state.providers, ...state.imageProviders].map(async p => {
     try { p.hasKey = await invoke<boolean>('credential_exists', { id: p.id }); }
-    catch { p.hasKey = false; }
+    catch { /* A locked keychain does not mean the saved credential was removed. */ }
   }));
 }
 let saveQueue = Promise.resolve();
@@ -26,7 +26,8 @@ export function saveWorkspace(state: Workspace): Promise<void> {
 export async function saveCredential(id: string, key: string) {
   await invoke('save_credential', { id, secret: key });
 }
-type Request = { url: string; method?: string; headers?: Record<string, string>; body?: string; providerId?: string; keyHeader?: string; keyPrefix?: string; signal?: AbortSignal; onChunk?: (text: string) => void; binary?: boolean };
+type Multipart = { fields: Record<string, string>; files: { field: string; name: string; mime: string; bytes: number[] }[] };
+type Request = { url: string; method?: string; headers?: Record<string, string>; body?: string; form?: Multipart; providerId?: string; keyHeader?: string; keyPrefix?: string; signal?: AbortSignal; onChunk?: (text: string) => void; binary?: boolean };
 export class HttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); this.name = 'HttpError'; }
 }
@@ -39,7 +40,7 @@ export async function http(request: Request): Promise<{ text: string; bytes: Uin
   request.signal?.addEventListener('abort', abort, { once: true });
   try {
     request.signal?.throwIfAborted();
-    const response = await invoke<{ text: string; bytes: number[]; status: number }>('http_request', { request: { id, url: request.url, method: request.method ?? 'GET', headers: request.headers ?? {}, body: request.body ?? null, providerId: request.providerId ?? null, keyHeader: request.keyHeader ?? null, keyPrefix: request.keyPrefix ?? null, stream: !!request.onChunk, binary: !!request.binary } });
+    const response = await invoke<{ text: string; bytes: number[]; status: number }>('http_request', { request: { id, url: request.url, method: request.method ?? 'GET', headers: request.headers ?? {}, body: request.body ?? null, form: request.form ?? null, providerId: request.providerId ?? null, keyHeader: request.keyHeader ?? null, keyPrefix: request.keyPrefix ?? null, stream: !!request.onChunk, binary: !!request.binary } });
     const tail = decoder.decode(); if (tail) request.onChunk?.(tail);
     request.signal?.throwIfAborted();
     if (response.status >= 300) throw new HttpError(response.status, errorText(response.text, response.status));
@@ -50,6 +51,10 @@ function errorText(text: string, status: number) {
   try { const json = JSON.parse(text); return `HTTP ${status}：${json.error?.message ?? json.message ?? text.slice(0, 300)}`; } catch { return `HTTP ${status}：${text.replace(/<[^>]+>/g, '').slice(0, 200)}`; }
 }
 export type InputFile = { name: string; bytes: Uint8Array };
+export async function pickCover(): Promise<InputFile | null> {
+  const file = await invoke<{ name: string; bytes: number[] } | null>('pick_cover');
+  return file ? { ...file, bytes: new Uint8Array(file.bytes) } : null;
+}
 export async function pickFiles(options: { folder?: boolean; skills?: boolean } = {}): Promise<InputFile[]> {
   const files = await invoke<{ name: string; bytes: number[] }[]>('pick_files', { folder: !!options.folder, skills: !!options.skills });
   return files.map(f => ({ ...f, bytes: new Uint8Array(f.bytes) }));

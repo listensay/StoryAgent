@@ -1,6 +1,7 @@
 import { cloneElement, isValidElement, useEffect, useId, useState, type ReactNode, type ReactElement } from 'react';
-import { ActionIcon, Button as MantineButton, Input, Modal as MantineModal, Select as MantineSelect, Stack, Group, ThemeIcon, Title, Paper, Tabs, Tooltip, Text } from '@mantine/core';
+import { ActionIcon, Box, Button as MantineButton, Input, Modal as MantineModal, ScrollArea, Select as MantineSelect, Stack, Group, ThemeIcon, Title, Paper, Tabs, Tooltip, Text } from '@mantine/core';
 import { X, Plus, ChevronDown, type AppIcon } from './icons';
+import { Markdown } from './Markdown';
 
 export { TextInput, Textarea, NumberInput, Checkbox, Switch, Fieldset, UnstyledButton, Title, Badge, Paper, Autocomplete } from '@mantine/core';
 
@@ -33,8 +34,11 @@ export function ModalPresence({ children }: { children: ReactElement<ModalVisibi
   const modal = children || retained;
   return modal ? cloneElement(modal, { opened: !!children && ready, onExitTransitionEnd: () => { setRetained(undefined); setReady(false); } }) : null;
 }
-export function Modal({ title, children, footer, onClose, wide = false, opened = true, onExitTransitionEnd, onEnterTransitionEnd }: { title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean; onEnterTransitionEnd?: () => void } & ModalVisibilityProps) {
-  return <MantineModal opened={opened} onClose={onClose} onExitTransitionEnd={onExitTransitionEnd} onEnterTransitionEnd={onEnterTransitionEnd} title={title} size={wide ? 880 : 480} closeButtonProps={{ icon: <X size={20} />, 'aria-label': '关闭' }} styles={{ content: { pointerEvents: opened ? undefined : 'none' } }}><Stack gap="lg">{children}{footer && <Group justify="flex-end" gap="sm" pt="md" className="modal-footer">{footer}</Group>}</Stack></MantineModal>;
+function BoundedModalArea({ children }: { children: ReactNode }) {
+  return <Box style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>{children}</Box>;
+}
+export function Modal({ title, children, footer, onClose, wide = false, bounded = false, opened = true, onExitTransitionEnd, onEnterTransitionEnd }: { title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean; bounded?: boolean; onEnterTransitionEnd?: () => void } & ModalVisibilityProps) {
+  return <MantineModal opened={opened} onClose={onClose} onExitTransitionEnd={onExitTransitionEnd} onEnterTransitionEnd={onEnterTransitionEnd} title={title} size={bounded ? 'min(1200px, 94vw)' : wide ? 880 : 480} {...bounded ? { scrollAreaComponent: BoundedModalArea } : {}} closeButtonProps={{ icon: <X size={20} />, 'aria-label': '关闭' }} styles={{ content: { pointerEvents: opened ? undefined : 'none', ...(bounded ? { height: 'calc(100dvh - 64px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' } : {}) }, ...(bounded ? { header: { flexShrink: 0 }, body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } } : {}) }}><Stack gap="lg" style={bounded ? { flex: 1, minHeight: 0, overflow: 'hidden' } : undefined}>{children}{footer && <Group justify="flex-end" gap="sm" pt="md" className="modal-footer" style={{ flexShrink: 0 }}>{footer}</Group>}</Stack></MantineModal>;
 }
 export function Confirm({ title, content, onConfirm, onClose, ...visibility }: { title: string; content: string; onConfirm: () => void; onClose: () => void } & ModalVisibilityProps) {
   return <Modal title={title} onClose={onClose} {...visibility} footer={<><Button onClick={onClose}>取消</Button><Button danger onClick={() => { onConfirm(); onClose(); }}>确认</Button></>}><Text size="sm">{content}</Text></Modal>;
@@ -45,6 +49,6 @@ export function Select({ label, value, onChange, options, className, placeholder
 export function OptionTabs({ value, onChange, options, label }: { value: string; onChange: (value: string) => void; options: { value: string; label: string }[]; label: string }) {
   return <Tabs value={value} onChange={v => { if (v !== null) onChange(v); }}><Tabs.List aria-label={label}>{options.map(o => <Tabs.Tab value={o.value} key={o.value}>{o.label}</Tabs.Tab>)}</Tabs.List></Tabs>;
 }
-export function Diff({ left, right, leftTitle = '当前正文', rightTitle = '生成结果' }: { left: string; right: string; leftTitle?: string; rightTitle?: string }) {
-  return <div className="diff"><Paper shadow="none" p="md" style={{ display: 'flex', flexDirection: 'column' }}><Title order={3} mb="md">{leftTitle}</Title>{left.trim() ? <pre className="prose">{left}</pre> : <EmptyState>暂无内容</EmptyState>}</Paper><Paper shadow="none" p="md" style={{ display: 'flex', flexDirection: 'column' }}><Title order={3} mb="md">{rightTitle}</Title>{right.trim() ? <pre className="prose">{right}</pre> : <EmptyState>暂无内容</EmptyState>}</Paper></div>;
+export function Diff({ left, right, leftTitle = '当前正文', rightTitle = '生成结果', onError }: { left: string; right: string; leftTitle?: string; rightTitle?: string; onError: (message: string) => void }) {
+  return <div className="diff">{[[leftTitle, left], [rightTitle, right]].map(([title, text], index) => <Paper key={index} shadow="none" p="md" className="diff-column"><Title order={3} mb="md" style={{ flexShrink: 0 }}>{title}</Title>{text.trim() ? <ScrollArea type="always" scrollbars="y" offsetScrollbars className="diff-scroll" viewportProps={{ tabIndex: 0, role: 'region', 'aria-label': `${title}内容` }}><Box pr="sm"><Markdown size="md" onError={onError}>{text}</Markdown></Box></ScrollArea> : <EmptyState>暂无内容</EmptyState>}</Paper>)}</div>;
 }

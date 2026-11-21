@@ -44,6 +44,15 @@ describe('Markdown results', () => {
     expect(render('```text\n尚未结束的代码')).toContain('尚未结束的代码');
   });
 
+  it('renders Chinese bold labels adjacent to prose without reinterpreting code or escaped text', () => {
+    const html = render('- **主视角：**第三人称\n\n**场景变化：**陆昭开始行动。\n\n`**代码：**保持`\n\n\\*\\*原样：\\*\\*保持\n\n[**链接：**保持](https://example.com)');
+    expect(html).toContain('<strong>主视角：</strong>第三人称');
+    expect(html).toContain('<strong>场景变化：</strong>陆昭开始行动。');
+    expect(html).toContain('<code>**代码：**保持</code>');
+    expect(html).toContain('**原样：**保持');
+    expect(html).toContain('**链接：**保持');
+  });
+
   it('does not render executable HTML, unsafe links or remote images', () => {
     const html = render('<script>alert(1)</script>\n\n<img src="https://example.com/track" onerror="alert(1)">\n\n[危险](javascript:alert%281%29) [文件](file:///tmp/test) [资料](https://example.com)\n\n![图示](https://example.com/image.png)');
     expect(html).not.toContain('<script');

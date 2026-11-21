@@ -86,6 +86,6 @@ export function BookSearch({ store, onSettings }: { store: Store; onSettings: ()
         catch (error) { store.notify(error instanceof Error ? error.message : String(error)); }
       }} />
     </Stack></Paper>}
-    {store.state.jobs.filter(job => sourceIds.has(job.sourceId)).map(job => <JobCard key={job.id} job={job} store={store} />)}
+    {store.state.jobs.filter(job => sourceIds.has(job.sourceId)).reverse().map(job => <JobCard key={job.id} job={job} store={store} />)}
   </Stack>;
 }

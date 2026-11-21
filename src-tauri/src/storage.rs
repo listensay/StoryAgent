@@ -1,5 +1,5 @@
 use rusqlite::{Connection, params};
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf, sync::{Mutex, OnceLock}};
 use tauri::{AppHandle, Manager};
 
 fn connection(app: &AppHandle) -> Result<Connection, String> {
@@ -30,26 +30,116 @@ pub fn save_workspace(app: AppHandle, data: String) -> Result<(), String> {
     Ok(())
 }
 
+const CREDENTIAL_SERVICE: &str = "com.od23.storyagent";
+static SESSION_KEYS: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+
+fn session_keys() -> &'static Mutex<HashMap<String, Option<String>>> {
+    SESSION_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn provider_key(id: &str) -> Result<Option<String>, String> {
+    let entry = credential(id)?;
+    // Serialize the first read so concurrent AI requests cannot open duplicate prompts.
+    let mut keys = session_keys().lock().map_err(|_| "密钥状态不可用")?;
+    if let Some(key) = keys.get(id) { return Ok(key.clone()); }
+    let key = match entry.get_password() {
+        Ok(key) => Some(key),
+        Err(keyring::Error::NoEntry) => None,
+        Err(error) => return Err(format!("读取密钥失败：{error}")),
+    };
+    keys.insert(id.to_string(), key.clone());
+    Ok(key)
+}
+
 pub fn credential(id: &str) -> Result<keyring::Entry, String> {
     if id.is_empty() || id.len() > 128 {
         return Err("服务标识无效".into());
     }
-    keyring::Entry::new("com.od23.storyagent", id).map_err(|e| format!("凭据库不可用：{e}"))
+    keyring::Entry::new(CREDENTIAL_SERVICE, id).map_err(|e| format!("凭据库不可用：{e}"))
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn save_credential(id: String, secret: String) -> Result<(), String> {
+    credential(&id)?;
+    let mut keys = session_keys().lock().map_err(|_| "密钥状态不可用")?;
+    // SecItemAdd/Update updates an existing entry without first reading its secret.
+    // The legacy keyring setter treats every read failure as a missing entry.
+    let result = if secret.is_empty() {
+        match security_framework::passwords::delete_generic_password(CREDENTIAL_SERVICE, &id) {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == -25300 => Ok(()),
+            Err(e) => Err(format!("密钥保存失败：{e}")),
+        }
+    } else {
+        security_framework::passwords::set_generic_password(CREDENTIAL_SERVICE, &id, secret.as_bytes())
+            .map_err(|e| format!("密钥保存失败：{e}"))
+    };
+    if result.is_ok() { keys.insert(id, if secret.is_empty() { None } else { Some(secret) }); }
+    result
+}
+
+#[cfg(not(target_os = "macos"))]
 #[tauri::command]
 pub fn save_credential(id: String, secret: String) -> Result<(), String> {
     let entry = credential(&id)?;
-    if secret.is_empty() {
+    let mut keys = session_keys().lock().map_err(|_| "密钥状态不可用")?;
+    let result = if secret.is_empty() {
         match entry.delete_credential() {
             Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
     } else {
         entry.set_password(&secret).map_err(|e| e.to_string())
+    };
+    if result.is_ok() { keys.insert(id, if secret.is_empty() { None } else { Some(secret) }); }
+    result
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn updates_existing_keychain_credentials() {
+        let id = format!("storyagent-credential-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let entry = credential(&id).unwrap();
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = save_credential(self.0.clone(), String::new()); }
+        }
+        let _cleanup = Cleanup(id.clone());
+        entry.set_password("legacy-test-secret").unwrap();
+        assert!(credential_exists(id.clone()).unwrap());
+        save_credential(id.clone(), "updated-test-secret".into()).unwrap();
+        assert_eq!(entry.get_password().unwrap(), "updated-test-secret");
+        assert_eq!(provider_key(&id).unwrap().as_deref(), Some("updated-test-secret"));
+        save_credential(id.clone(), "updated-test-secret".into()).unwrap();
+        save_credential(id.clone(), "replacement-test-secret".into()).unwrap();
+        assert_eq!(entry.get_password().unwrap(), "replacement-test-secret");
+        assert_eq!(provider_key(&id).unwrap().as_deref(), Some("replacement-test-secret"));
+        save_credential(id.clone(), String::new()).unwrap();
+        assert!(provider_key(&id).unwrap().is_none());
+        assert!(!credential_exists(id.clone()).unwrap());
+        save_credential(id, String::new()).unwrap();
     }
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn credential_exists(id: String) -> Result<bool, String> {
+    credential(&id)?;
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+    // Query metadata only. Never fetch password bytes merely to render settings.
+    match ItemSearchOptions::new().class(ItemClass::generic_password())
+        .service(CREDENTIAL_SERVICE).account(&id).load_attributes(true).load_data(false).search() {
+        Ok(items) => Ok(!items.is_empty()),
+        Err(error) if error.code() == -25300 => Ok(false),
+        Err(error) => Err(format!("凭据库不可用：{error}")),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 #[tauri::command]
 pub fn credential_exists(id: String) -> Result<bool, String> {
     match credential(&id)?.get_password() {
@@ -67,6 +157,16 @@ pub struct ImportedFile {
 }
 
 const MAX_FILE: u64 = 20 * 1024 * 1024;
+
+#[tauri::command]
+pub async fn pick_cover() -> Result<Option<ImportedFile>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let Some(path) = rfd::FileDialog::new().set_title("上传封面").add_filter("图片", &["png", "jpg", "jpeg", "webp"]).pick_file() else { return Ok(None); };
+        if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 10 * 1024 * 1024 { return Err("封面图片须小于 10 MB".into()); }
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        read_file(path, name).map(Some)
+    }).await.map_err(|e| e.to_string())?
+}
 
 fn read_file(path: PathBuf, name: String) -> Result<ImportedFile, String> {
     if fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_FILE {

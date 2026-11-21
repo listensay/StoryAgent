@@ -120,6 +120,19 @@ export class StreamParser {
     while ((index = this.buffer.indexOf('\n\n')) >= 0) { this.event(this.buffer.slice(0, index)); this.buffer = this.buffer.slice(index + 2); }
   }
   finish(raw: string) {
+    // The final response is authoritative: WebView chunk events can arrive
+    // after the invoke result, leaving the live preview short of the final SSE.
+    if (raw.trim().startsWith('data:') || raw.includes('\ndata:')) {
+      const complete = new StreamParser(() => {});
+      complete.feed(raw);
+      let failure: unknown;
+      try { complete.finish(''); } catch (error) { failure = error; }
+      const changed = this.text !== complete.text;
+      this.buffer = ''; this.text = complete.text; this.error = complete.error;
+      this.completed = complete.completed; this.truncated = complete.truncated;
+      if (changed && this.text) this.onText(this.text);
+      if (failure) throw failure;
+    }
     if (this.buffer.trim().startsWith('data:') || this.buffer.includes('\ndata:')) this.event(this.buffer);
     if (!this.text && raw.trim().startsWith('{')) {
       try { const data = JSON.parse(raw); this.text = outputText(data); this.completed = true; this.truncated = data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.some((c: Json) => c.finish_reason === 'length') || data.candidates?.some((c: Json) => c.finishReason === 'MAX_TOKENS'); if (this.text) this.onText(this.text); } catch (e) { this.error = e instanceof Error ? e : new Error(String(e)); }
@@ -133,9 +146,8 @@ export class StreamParser {
 }
 export async function generate(provider: Provider, config: AIConfig, system: string, user: string, signal: AbortSignal, onText: (text: string) => void): Promise<string> {
   const request = requestBody(provider, config, system, user);
-  return withAIRetry(provider, signal, async attempt => {
-    // Each attempt replaces its own streamed text; previously completed task output is retained by the caller.
-    if (attempt > 0) onText('');
+  return withAIRetry(provider, signal, async () => {
+    // Keep the last preview until a retry actually produces replacement text.
     const parser = new StreamParser(onText);
     let active = true;
     try {

@@ -4,6 +4,7 @@ import { HttpError } from './platform';
 export class PermanentAIError extends Error {}
 
 function canRetry(error: unknown) {
+  if (/读取密钥失败|密钥状态不可用|凭据库不可用/.test(String(error))) return false;
   if (error instanceof PermanentAIError || (error instanceof Error && error.name === 'AbortError')) return false;
   if (error instanceof HttpError) return [408, 409, 429].includes(error.status) || error.status >= 500;
   return true;

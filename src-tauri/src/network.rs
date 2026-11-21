@@ -52,11 +52,26 @@ pub struct HttpRequest {
     method: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    form: Option<Multipart>,
     provider_id: Option<String>,
     key_header: Option<String>,
     key_prefix: Option<String>,
     stream: bool,
     binary: bool,
+}
+
+#[derive(Deserialize)]
+struct Multipart {
+    fields: HashMap<String, String>,
+    files: Vec<MultipartFile>,
+}
+
+#[derive(Deserialize)]
+struct MultipartFile {
+    field: String,
+    name: String,
+    mime: String,
+    bytes: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -102,13 +117,23 @@ pub async fn http_request(
         let mut builder = client.request(method, url);
         for (key, value) in &request.headers { builder = builder.header(key, value); }
         if let Some(id) = &request.provider_id {
-            match crate::storage::credential(id)?.get_password() {
-                Ok(key) => { builder = builder.header(request.key_header.as_deref().unwrap_or("Authorization"), format!("{}{}", request.key_prefix.as_deref().unwrap_or("Bearer "), key)); }
-                Err(keyring::Error::NoEntry) => {}
-                Err(e) => return Err(format!("读取密钥失败：{e}")),
+            if let Some(key) = crate::storage::provider_key(id)? {
+                builder = builder.header(request.key_header.as_deref().unwrap_or("Authorization"), format!("{}{}", request.key_prefix.as_deref().unwrap_or("Bearer "), key));
             }
         }
         if let Some(body) = &request.body { builder = builder.body(body.clone()); }
+        if let Some(form) = &request.form {
+            let mut multipart = reqwest::multipart::Form::new();
+            for (name, value) in &form.fields { multipart = multipart.text(name.clone(), value.clone()); }
+            let mut total = 0;
+            for file in &form.files {
+                total += file.bytes.len();
+                if total > 20 * 1024 * 1024 { return Err("图片超过 20 MB".into()); }
+                let part = reqwest::multipart::Part::bytes(file.bytes.clone()).file_name(file.name.clone()).mime_str(&file.mime).map_err(|_| "图片类型无效")?;
+                multipart = multipart.part(file.field.clone(), part);
+            }
+            builder = builder.multipart(multipart);
+        }
         let response = tokio::select! { result = builder.send() => result.map_err(|e| format!("请求失败：{e}"))?, _ = cancel.changed() => return Err("请求已停止".into()) };
         let status = response.status().as_u16();
         let mut stream = response.bytes_stream();

@@ -19,7 +19,7 @@ export function Training({ store, onSettings, focusJobId }: { store: Store; onSe
   const chapters = reference ? importChapters(reference.content) : [];
   const original = chapters[Number(chapterIndex)]?.content ?? '';
   useEffect(() => { const job = store.state.jobs.find(j => j.id === focusJobId); if (job?.training) setSkillId(job.training.skillId); }, [focusJobId]);
-  const jobs = store.state.jobs.filter(j => j.training?.skillId === skillId);
+  const jobs = store.state.jobs.filter(j => j.training?.skillId === skillId).reverse();
   const run = () => {
     try {
       if (!skill || !original.trim()) throw new Error('请选择 Skill 和评分原文');
