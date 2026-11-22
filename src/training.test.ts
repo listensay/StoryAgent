@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createJob, emptyWorkspace, parseWorkspace, type Job, type JobStep, type TrainingAnnotation } from './domain';
 import { parseSkills } from './skills';
-import { applyBestSkill, finishTrainingStep, initializeTraining, parseEvaluation, recordEvaluation, scenarioTraining, trainingPrompt, validateTraining } from './training';
+import { applyBestSkill, continueTraining, finishTrainingStep, initializeTraining, parseEvaluation, recordEvaluation, scenarioTraining, trainingPrompt, validateTraining } from './training';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 const rules = '---\nname: narrative\ndescription: 通用创作规则\n---\n先建立人物目标，再引入有代价的阻碍。';
 const original = '城市里的钟表忽然全部停摆，主角林舟从旧信封里发现了一张通往未来的车票，但背面写着他十年前遗失的姓名。他赶到车站，发现售票员早已知道他的来意。';
@@ -11,7 +11,7 @@ function setup(mode: 'chapter' | 'scenario' = 'chapter') {
   const state = emptyWorkspace(), skill = parseSkills([{ path: 'SKILL.md', content: rules }], '测试')[0]; state.skills.push(skill);
   const job = createJob(undefined, 'train', null, [], '');
   job.sourceText = '不应泄漏的参考资料'; job.sourceTitle = '原作标题';
-  job.training = validateTraining({ skillId: skill.id, initialSkill: rules, bestSkill: rules, bestScore: -1, targetScore: 9, maxRounds: 3, judge: 'human', mode, chapterTitle: '第一章', original, cases: [], evaluations: [] });
+  job.training = validateTraining({ skillId: skill.id, initialSkill: rules, bestSkill: rules, bestScore: -1, targetScore: 9, judge: 'human', mode, chapterTitle: '第一章', original, cases: [], evaluations: [] });
   initializeTraining(job); state.jobs.push(job); return { state, skill, job };
 }
 const judge = (job: Job, round = 1) => job.steps.find(s => s.stage === 'train-judge' && s.round === round)!;
@@ -110,9 +110,9 @@ describe('原文章节训练与用户反馈', () => {
     expect(job.training!.approvedAt).toBeUndefined(); expect(job.steps[job.steps.length - 1]?.stage).toBe('train-revise');
     expect(() => scenarioTraining(state, job.id)).toThrow('确认章节训练效果满意');
   });
-  it('保留最佳已评版本，到轮数上限结束，Skill 同时编辑时不覆盖', () => {
-    const { state, skill, job } = setup(); job.training!.maxRounds = 2; prepare(job); write(job); score(job, [8]);
-    const revision = job.steps[job.steps.length - 1]!; revision.output = rules + '\n调整规则。'; finishTrainingStep(job, revision); write(job, 2); score(job, [5]);
+  it('用户选择结束时保留最佳已评版本，Skill 同时编辑时不覆盖', () => {
+    const { state, skill, job } = setup(); prepare(job); write(job); score(job, [8]);
+    const revision = job.steps[job.steps.length - 1]!; revision.output = rules + '\n调整规则。'; finishTrainingStep(job, revision); write(job, 2); score(job, [5], '', true);
     expect(job.training!.bestScore).toBe(8); expect(job.training!.bestSkill).toBe(rules); expect(job.steps.some(s => s.round === 3)).toBe(false);
     applyBestSkill(state, job); expect(skill.revisions).toHaveLength(0);
     job.training!.bestSkill = revision.output; skill.files[0].content = '用户新编辑'; expect(() => applyBestSkill(state, job)).toThrow('已更新');
@@ -138,13 +138,54 @@ describe('原文章节训练与用户反馈', () => {
   });
   it('新任务拒绝 AI 评分、空原文、多个章节，清空旧评分与满意标记', () => {
     const { job } = setup(), training = job.training!;
-    expect(() => validateTraining({ ...training, maxRounds: 11 })).toThrow();
     expect(() => validateTraining({ ...training, original: '' })).toThrow();
     expect(() => validateTraining({ ...training, judge: 'ai' as 'human' })).toThrow();
     expect(() => validateTraining({ ...training, cases: [1, 2].map(i => ({ title: String(i), brief, original: '' })) })).toThrow('仅使用所选原文章节');
     expect(() => validateTraining({ ...training, initialSkill: rules + original })).toThrow('原文段落');
     expect(validateTraining({ ...training, bestScore: 10, bestSkill: '旧最佳', approvedAt: '旧标记' })).toMatchObject({ bestScore: -1, bestSkill: rules, evaluations: [], approvedAt: undefined });
     expect(() => parseEvaluation('{"scores":[1,2],"feedback":"","decision":"auto"}', 1)).toThrow('数量');
+  });
+  it('超过原来的十轮限制仍按用户选择继续，结束后不再生成', () => {
+    const { job } = setup(); prepare(job);
+    for (let round = 1; round <= 12; round++) {
+      write(job, round); score(job, [6.9], '继续改进表达', round === 12);
+      if (round < 12) {
+        const revision = job.steps[job.steps.length - 1];
+        expect(revision).toMatchObject({ stage: 'train-revise', round });
+        revision.output = rules + `\n第 ${round} 次修订。`; finishTrainingStep(job, revision);
+      }
+    }
+    expect(job.training!.evaluations).toHaveLength(12);
+    expect(job.steps.some(s => s.round === 13)).toBe(false); expect(job.training!.approvedAt).toBeTruthy();
+  });
+  it('旧任务达到一轮上限后，可以直接沿用6.9分及划词评价继续修订', () => {
+    const { state, job } = setup(); prepare(job); write(job);
+    score(job, [6.9], '减少总结性陈述', true, [{ target: 'candidate', caseIndex: 0, start: 0, end: 6, quote: '林舟拿起车票', feedback: '缺少具体动作' }]);
+    job.status = 'accepted';
+    const legacy = JSON.parse(JSON.stringify(state)); legacy.jobs[0].training.maxRounds = 1;
+    const restored = parseWorkspace(JSON.stringify(legacy)).jobs[0];
+    expect(restored.training).not.toHaveProperty('maxRounds');
+    continueTraining(restored);
+    const revision = restored.steps[restored.steps.length - 1];
+    expect(restored.status).toBe('queued'); expect(restored.training!.approvedAt).toBeUndefined();
+    for (const evidence of ['减少总结性陈述', '缺少具体动作', '"score":6.9']) expect(trainingPrompt(restored, revision).user).toContain(evidence);
+    expect(() => continueTraining(restored)).toThrow('完成本轮');
+    revision.output = rules + '\n避免总结代替具体行动。'; finishTrainingStep(restored, revision);
+    expect(restored.steps.some(s => s.stage === 'train-write' && s.round === 2)).toBe(true);
+  });
+  it('评价草稿保存恢复，提交后清空，后续轮次不会复用旧草稿', () => {
+    const { state, job } = setup(); prepare(job); write(job);
+    job.training!.review = { round: 1, scores: [6.9], feedback: '需要调整', annotations: [{ target: 'candidate', caseIndex: 0, start: 0, end: 6, quote: '林舟拿起车票', feedback: '缺少具体动作' }] };
+    const restored = parseWorkspace(JSON.stringify(state)).jobs[0]; expect(restored.training!.review).toEqual(job.training!.review);
+    const draft = restored.training!.review!; score(restored, draft.scores as number[], draft.feedback, false, draft.annotations);
+    expect(restored.training!.review).toBeUndefined(); expect(restored.training!.evaluations[0].annotations).toEqual(draft.annotations);
+  });
+  it('继续已完成训练后允许更新此前采用的训练版本', () => {
+    const { state, job, skill } = setup(); prepare(job); write(job); score(job, [4]);
+    const revision = job.steps[job.steps.length - 1]; revision.output = rules + '\n第一次优化。'; finishTrainingStep(job, revision); write(job, 2); score(job, [6], '', true);
+    job.status = 'accepted'; applyBestSkill(state, job); expect(skill.files[0].content).toBe(revision.output);
+    continueTraining(job); const next = job.steps[job.steps.length - 1]; next.output = rules + '\n第二次优化。'; finishTrainingStep(job, next); write(job, 3); score(job, [8], '', true);
+    applyBestSkill(state, job); expect(skill.files[0].content).toBe(next.output); expect(skill.revisions).toHaveLength(2);
   });
 });
 describe('用户确认后进行其他场景训练', () => {

@@ -8,7 +8,7 @@ import { buildPrompt, prepareAnalysis, synthesisSteps } from './prompts';
 import { publishJobOutput } from './jobOutput';
 import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep, writingTarget } from './jobWorkflow';
-import { applyBestSkill, finishTrainingStep, initializeTraining, recordEvaluation, scenarioTraining, skillText, trainingPrompt, validateTraining } from './training';
+import { applyBestSkill, continueTraining as continueTrainingJob, finishTrainingStep, initializeTraining, recordEvaluation, scenarioTraining, skillText, trainingPrompt, validateTraining } from './training';
 import { runnableJobs } from './taskQueue';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 import { runArticleCollection, runCollection } from './collectionTask';
@@ -363,6 +363,19 @@ export function useWorkspace() {
 
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
   }, [notify, update]);
+  const continueTraining = useCallback((id: string) => {
+    try {
+      if (restarting.current) throw new Error('正在更新软件');
+      const config = resolveAI(stateRef.current.aiSelection, stateRef.current.providers);
+      update(s => {
+        const job = s.jobs.find(j => j.id === id);
+        if (!job?.training) throw new Error('训练任务不存在');
+        if (s.jobs.some(j => j.id !== id && j.training?.skillId === job.training!.skillId && ['queued', 'running', 'waiting', 'paused'].includes(j.status))) throw new Error('该 Skill 已有未完成的训练任务');
+        if (!s.skills.some(skill => skill.id === job.training!.skillId)) throw new Error('Skill 已移除');
+        continueTrainingJob(job); job.ai = config;
+      });
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  }, [notify, update]);
   const stop = useCallback((id: string) => {
     const active = controllers.current.get(id);
     if (active) active.abort();
@@ -429,7 +442,7 @@ export function useWorkspace() {
     return true;
   }, [canUpdate]);
   const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };

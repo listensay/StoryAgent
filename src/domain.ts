@@ -41,11 +41,12 @@ export const trainingAnnotationSchema = z.object({
 export type TrainingAnnotation = z.infer<typeof trainingAnnotationSchema>;
 export const trainingSchema = z.object({
   skillId: z.string(), initialSkill: z.string(), bestSkill: z.string(), bestScore: z.number().default(-1),
-  targetScore: z.number().min(1).max(10), maxRounds: z.number().int().min(1).max(10), judge: z.literal('human'),
+  targetScore: z.number().min(1).max(10), judge: z.literal('human'),
   original: z.string().optional(), chapterTitle: z.string().optional(), mode: z.enum(['chapter', 'scenario']).optional(),
   parentJobId: z.string().optional(), approvedAt: z.string().optional(),
   cases: z.array(z.object({ title: z.string().min(1), brief: z.string().trim().min(1).max(8000), original: z.string() })).max(6),
   evaluations: z.array(z.object({ round: z.number(), scores: z.array(z.number().min(0).max(10)), feedback: z.string(), decision: z.enum(['revise', 'reextract', 'keep', 'auto']), source: z.enum(['ai', 'human']), annotations: z.array(trainingAnnotationSchema).max(100).optional(), satisfied: z.boolean().optional() })),
+  review: z.object({ round: z.number().int().positive(), scores: z.array(z.union([z.number().min(0).max(10), z.literal('')])), feedback: z.string().max(8000), annotations: z.array(trainingAnnotationSchema).max(100) }).optional(),
 }).refine(value => value.cases.length >= 1 || !!value.original?.trim(), { message: '请选择原文章节' });
 const collectionTaskSchema = z.object({ bookUrl: z.string(), title: z.string(), scope: z.enum(['opening', 'chapter', 'available']), chapterId: z.string(), rule: articleRuleSchema.optional(), referenceId: z.string(), done: z.number().default(0), total: z.number().default(0) });
 const articleTaskSchema = z.object({ url: z.string(), rule: articleRuleSchema, mode: z.enum(['catalog', 'chapter', 'range']), page: articlePageSchema.optional(), links: z.array(z.object({ title: z.string(), url: z.string() })), referenceId: z.string(), done: z.number().int().nonnegative().default(0), total: z.number().int().nonnegative().default(0) });

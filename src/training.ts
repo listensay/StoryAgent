@@ -15,7 +15,7 @@ export function validateTraining(training: NonNullable<Job['training']>) {
   if (value.mode !== 'scenario' && value.cases.length > 1) throw new Error('章节训练仅使用所选原文章节');
   for (const scenario of value.cases) if (containsOriginal(scenario.brief, original)) throw new Error('创作提示词包含原文段落，请重新提炼');
   if (containsOriginal(value.initialSkill, original)) throw new Error('Skill 包含原文段落，请先提炼通用规则');
-  value.bestScore = -1; value.evaluations = []; value.bestSkill = value.initialSkill; value.approvedAt = undefined;
+  value.bestScore = -1; value.evaluations = []; value.bestSkill = value.initialSkill; value.approvedAt = undefined; value.review = undefined;
   return value;
 }
 function containsOriginal(text: string, original: string) {
@@ -91,7 +91,16 @@ export function recordEvaluation(job: Job, part: JobStep, input: z.infer<typeof 
   if (evaluation.satisfied && training.mode !== 'scenario') training.approvedAt = now();
   part.output = `用户评分：${evaluation.scores.join('、')} / 10${evaluation.feedback ? `\n\n${evaluation.feedback}` : ''}`;
   part.status = 'accepted';
-  if (!evaluation.satisfied && part.round! < training.maxRounds) job.steps.push(step(job, 'train-revise', part.round!, `第 ${part.round} 轮 · 根据用户反馈调整 Skill`));
+  training.review = undefined;
+  if (!evaluation.satisfied) job.steps.push(step(job, 'train-revise', part.round!, `第 ${part.round} 轮 · 根据用户反馈调整 Skill`));
+}
+export function continueTraining(job: Job) {
+  const training = job.training, evaluation = training?.evaluations[training.evaluations.length - 1];
+  if (!training || job.status !== 'accepted' || !evaluation || job.steps.some(s => s.status !== 'accepted')) throw new Error('请先完成本轮训练与评分');
+  if (job.steps.some(s => s.stage === 'train-revise' && s.round === evaluation.round)) throw new Error('本轮已继续训练');
+  evaluation.satisfied = false; evaluation.decision = 'auto'; training.approvedAt = undefined;
+  job.steps.push(step(job, 'train-revise', evaluation.round, `第 ${evaluation.round} 轮 · 根据用户反馈调整 Skill`));
+  job.status = 'queued'; job.error = '';
 }
 export function finishTrainingStep(job: Job, part: JobStep) {
   if (part.stage === 'train-judge') throw new Error('训练仅支持用户评分');
@@ -119,13 +128,13 @@ export function scenarioTraining(state: Workspace, parentJobId: string): NonNull
   if (!parent || parent.status !== 'accepted' || !training?.approvedAt || training.mode === 'scenario' || !training.evaluations.some(e => e.source === 'human' && e.satisfied)) throw new Error('请先确认章节训练效果满意');
   const skill = state.skills.find(s => s.id === training.skillId);
   if (!skill || skillText(skill) !== training.bestSkill) throw new Error('请先采用已验证的最佳 Skill');
-  return { ...structuredClone(training), mode: 'scenario', parentJobId, initialSkill: training.bestSkill, bestSkill: training.bestSkill, bestScore: -1, cases: [], evaluations: [], approvedAt: undefined };
+  return { ...structuredClone(training), mode: 'scenario', parentJobId, initialSkill: training.bestSkill, bestSkill: training.bestSkill, bestScore: -1, cases: [], evaluations: [], approvedAt: undefined, review: undefined };
 }
 export function applyBestSkill(state: Workspace, job: Job) {
   const training = job.training!, skill = state.skills.find(s => s.id === training.skillId);
   if (!skill) throw new Error('Skill 已移除');
   if (skillText(skill) === training.bestSkill) return;
-  if (skillText(skill) !== training.initialSkill) throw new Error('Skill 已更新，请在训练结果中手动采用最佳版本');
+  if (skillText(skill) !== training.initialSkill && !training.evaluations.some(e => roundSkill(job, e.round) === skillText(skill))) throw new Error('Skill 已更新，请在训练结果中手动采用最佳版本');
   if (training.bestSkill && training.bestSkill !== training.initialSkill) {
     skill.revisions.unshift({ version: skill.version, files: structuredClone(skill.files), savedAt: now() });
     skill.version = `训练 ${new Date().toLocaleDateString('zh-CN')} · ${training.bestScore.toFixed(1)}`;
