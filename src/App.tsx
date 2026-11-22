@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AppShell, Box, Center, Divider, Group, Loader, NavLink, ScrollArea, Stack, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { BookOpen, Download, Feather, FileText, Library, List, Network, NotebookPen, Puzzle, Settings2, Sparkles, TrendingUp, X, type AppIcon } from './icons';
+import { BookOpen, ChevronRight, Download, Feather, FileText, FolderOpen, Library, List, Network, NotebookPen, Puzzle, Settings2, Sparkles, TrendingUp, X, type AppIcon } from './icons';
 import { useWorkspace } from './useWorkspace';
 import { Button, IconButton, ModalPresence, Modal, Select } from './components';
 import { exportNovel, parseWorkspace, type Job } from './domain';
@@ -22,7 +22,7 @@ const Training = lazy(() => import('./pages/Training').then(m => ({ default: m.T
 const NovelCreation = lazy(() => import('./pages/NovelCreation').then(m => ({ default: m.NovelCreation })));
 
 type Route = 'projects' | 'create' | 'write' | 'details' | 'world' | 'outline' | 'memory' | 'research' | 'skills' | 'training' | 'settings';
-const names: Record<Route, string> = { projects: '我的小说', create: '新建小说', write: '写作', details: '创作准备', world: '世界设定', outline: '故事规划', memory: '小说记忆', research: '资料研究', skills: 'Skill', training: 'Skill 训练营', settings: 'AI 与设置' };
+const names: Record<Route, string> = { projects: '我的小说', create: '新建小说', write: '写作', details: '创作准备', world: '世界设定', outline: '故事规划', memory: '小说记忆', research: '资料研究', skills: '技能管理', training: 'Skill 训练营', settings: 'AI 与设置' };
 function App() {
   const store = useWorkspace();
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -61,7 +61,15 @@ function App() {
         <Box hiddenFrom="sm"><IconButton icon={X} label="关闭导航" onClick={() => setNavOpened(false)} /></Box>
       </Group>
       <AppShell.Section grow component={ScrollArea}>
-        <Stack gap={4}>{nav('projects', Library)}{project && <><Divider my="sm" /><Text size="xs" c="dimmed" px="sm" truncate title={project.title}>{project.title}</Text>{nav('write', NotebookPen)}{nav('details', Network)}{nav('outline', FileText)}{nav('memory', BookOpen)}</>}<Divider my="sm" />{nav('research', TrendingUp)}{nav('training', Puzzle)}{nav('skills', Puzzle)}</Stack>
+        <Stack gap={4}>
+          {nav('projects', Library)}
+          {project && <><Divider my="sm" /><Text size="xs" c="dimmed" px="sm" truncate title={project.title}>{project.title}</Text>{nav('write', NotebookPen)}{nav('details', Network)}{nav('outline', FileText)}{nav('memory', BookOpen)}</>}
+          <Divider my="sm" />
+          <NavLink component="button" label="资源库" leftSection={<FolderOpen size={21} />} rightSection={<ChevronRight size={18} />} defaultOpened={false} active={route === 'skills' || route === 'research'} childrenOffset={28}>
+            <Stack gap={4}>{nav('skills', Puzzle)}{nav('research', TrendingUp)}</Stack>
+          </NavLink>
+          {nav('training', Puzzle)}
+        </Stack>
       </AppShell.Section>
       <AppShell.Section pt="lg">{nav('settings', Settings2)}<Text size="xs" c="dimmed" ta="center" pt="md">StoryAgent{appVersion && ` ${appVersion}`}</Text></AppShell.Section>
     </AppShell.Navbar>
