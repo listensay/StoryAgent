@@ -33,13 +33,20 @@ const styleSchema = z.object({ id: z.string(), name: z.string(), content: z.stri
 const referenceSchema = z.object({ id: z.string(), title: z.string(), source: z.string(), kind: z.enum(['ranking', 'text']), content: z.string(), createdAt: z.string(), ranking: rankingSchema.optional(), bookUrl: z.string().optional(), collection: collectionSchema.optional() });
 const executionSchema = z.object({ summary: z.string(), skills: z.array(z.object({ id: z.string(), name: z.string(), version: z.string(), files: z.array(z.string()), contents: z.array(z.object({ path: z.string(), content: z.string() })).optional() })), startedAt: z.string(), finishedAt: z.string().optional() });
 const stepSchema = z.object({ id: z.string(), chapterId: z.string(), title: z.string(), status: z.enum(['pending', 'running', 'ready', 'accepted']), output: z.string(), reasoning: z.string().optional(), execution: executionSchema.optional(), baseContent: z.string(), basePlan: z.string(), selection: z.string(), selectionStart: z.number().int(), selectionEnd: z.number().int(), section: z.string().default(''), aggregate: z.boolean().default(false), intermediate: z.boolean().default(false), inputIds: z.array(z.string()).optional(), stage: z.string().optional(), round: z.number().int().optional(), caseIndex: z.number().int().optional() });
+export const trainingAnnotationSchema = z.object({
+  caseIndex: z.number().int().min(0).max(5), target: z.enum(['original', 'candidate']),
+  start: z.number().int().nonnegative(), end: z.number().int().nonnegative(),
+  quote: z.string().min(1).max(8000), feedback: z.string().trim().min(1).max(4000),
+}).refine(value => value.end > value.start, { message: '请选择评价片段' });
+export type TrainingAnnotation = z.infer<typeof trainingAnnotationSchema>;
 export const trainingSchema = z.object({
   skillId: z.string(), initialSkill: z.string(), bestSkill: z.string(), bestScore: z.number().default(-1),
-  targetScore: z.number().min(1).max(10), maxRounds: z.number().int().min(1).max(10), judge: z.enum(['ai', 'human']),
-  original: z.string().optional(),
+  targetScore: z.number().min(1).max(10), maxRounds: z.number().int().min(1).max(10), judge: z.literal('human'),
+  original: z.string().optional(), chapterTitle: z.string().optional(), mode: z.enum(['chapter', 'scenario']).optional(),
+  parentJobId: z.string().optional(), approvedAt: z.string().optional(),
   cases: z.array(z.object({ title: z.string().min(1), brief: z.string().trim().min(1).max(8000), original: z.string() })).max(6),
-  evaluations: z.array(z.object({ round: z.number(), scores: z.array(z.number().min(0).max(10)), feedback: z.string(), decision: z.enum(['revise', 'reextract', 'keep', 'auto']), source: z.enum(['ai', 'human']) })),
-}).refine(value => value.cases.length >= 2 || (value.cases.length === 0 && !!value.original?.trim()), { message: '训练需要评分原文及至少两个场景' });
+  evaluations: z.array(z.object({ round: z.number(), scores: z.array(z.number().min(0).max(10)), feedback: z.string(), decision: z.enum(['revise', 'reextract', 'keep', 'auto']), source: z.enum(['ai', 'human']), annotations: z.array(trainingAnnotationSchema).max(100).optional(), satisfied: z.boolean().optional() })),
+}).refine(value => value.cases.length >= 1 || !!value.original?.trim(), { message: '请选择原文章节' });
 const collectionTaskSchema = z.object({ bookUrl: z.string(), title: z.string(), scope: z.enum(['opening', 'chapter', 'available']), chapterId: z.string(), rule: articleRuleSchema.optional(), referenceId: z.string(), done: z.number().default(0), total: z.number().default(0) });
 const articleTaskSchema = z.object({ url: z.string(), rule: articleRuleSchema, mode: z.enum(['catalog', 'chapter', 'range']), page: articlePageSchema.optional(), links: z.array(z.object({ title: z.string(), url: z.string() })), referenceId: z.string(), done: z.number().int().nonnegative().default(0), total: z.number().int().nonnegative().default(0) });
 const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, ai: aiConfigSchema.nullable(), styleId: z.string(), instruction: z.string(), targetWords: z.number().int().min(100).max(50000).optional(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['queued', 'running', 'paused', 'failed', 'ready', 'accepted', 'waiting']), error: z.string(), steps: z.array(stepSchema), preparationBase: z.string().optional(), novelChat: z.object({ previousJobIds: z.array(z.string()), base: z.string(), before: z.string().optional(), appliedBase: z.string().optional(), undone: z.boolean().optional() }).optional(), planningChat: z.object({ previousJobIds: z.array(z.string()), base: z.string() }).optional(), skillIds: z.array(z.string()).optional(), training: trainingSchema.optional(), collectionTask: collectionTaskSchema.optional(), articleTask: articleTaskSchema.optional(), creationTask: creationTaskSchema.optional(), createdAt: z.string() });
@@ -71,6 +78,14 @@ export const builtinSkills = [
 export const emptyWorkspace = (): Workspace => ({ schemaVersion: 2, proxy: defaultProxySettings(), projects: [], providers: [], imageProviders: [], imageSelection: { providerId: '', model: '' }, coverOptions: defaultCoverOptions(), aiSelection: newAISelection(), skills: structuredClone(builtinSkills), styles: [], references: [], articleRules: structuredClone(defaultArticleRules), articleRulesRevision: 1, bookSearchHistory: [], jobs: [], activeProjectId: '', updatedAt: now() });
 export function parseWorkspace(raw: string): Workspace {
   let input = JSON.parse(raw);
+  // Existing training history remains readable; every resumed evaluation is manual.
+  for (const job of input?.jobs ?? []) if (job.training) {
+    job.training.judge = 'human';
+    if (!job.training.mode && !job.training.cases.length) {
+      job.training.mode = 'chapter';
+      for (const step of job.steps) if (step.stage === 'train-scenarios') { step.stage = 'train-brief'; step.title = '提炼章节内容与创作提示词'; }
+    }
+  }
   if (input?.imageConfig) {
     const { model, size, quality, ...provider } = imageConfigSchema.parse(input.imageConfig);
     input.imageProviders = [...(input.imageProviders ?? [])];

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type TaskKind, type Workspace } from './domain';
+import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type TaskKind, type TrainingAnnotation, type Workspace } from './domain';
 import { normalizeImageSelection } from './coverData';
 import { hasActiveRequests, loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
@@ -8,7 +8,7 @@ import { buildPrompt, prepareAnalysis, synthesisSteps } from './prompts';
 import { publishJobOutput } from './jobOutput';
 import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep, writingTarget } from './jobWorkflow';
-import { applyBestSkill, finishTrainingStep, initializeTraining, parseEvaluation, recordEvaluation, skillText, trainingPrompt, validateTraining } from './training';
+import { applyBestSkill, finishTrainingStep, initializeTraining, recordEvaluation, scenarioTraining, skillText, trainingPrompt, validateTraining } from './training';
 import { runnableJobs } from './taskQueue';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 import { runArticleCollection, runCollection } from './collectionTask';
@@ -98,6 +98,10 @@ export function useWorkspace() {
           const current = stateRef.current;
           const job = current.jobs.find(j => j.id === id); if (!job) return;
           const step = job.steps.find(s => s.id === stepId); if (!step) return;
+          if (job.training && step.stage === 'train-judge') {
+            commit(s => { const item = s.jobs.find(j => j.id === id); if (item) item.status = 'waiting'; });
+            return 'waiting';
+          }
           const config = job.ai;
           if (!config) throw new Error('请设置本次任务的 AI');
           const provider = current.providers.find(p => p.id === config.providerId);
@@ -106,10 +110,6 @@ export function useWorkspace() {
           if (synthesis.length) {
             commit(s => { const item = s.jobs.find(j => j.id === id); if (item) { const index = item.steps.findIndex(p => p.id === step.id); item.steps.splice(index, 1, ...synthesis); } });
             return;
-          }
-          if (job.training?.judge === 'human' && step.stage === 'train-judge') {
-            commit(s => { const item = s.jobs.find(j => j.id === id); if (item) item.status = 'waiting'; });
-            return 'waiting';
           }
           await requests.run(config.providerId, signal, async () => {
             const effectiveKind = (step.stage && ['plan', 'draft', 'continue', 'rewrite', 'summary', 'memory'].includes(step.stage) ? step.stage : job.kind) as TaskKind;
@@ -141,7 +141,6 @@ export function useWorkspace() {
               const planningResult = job.planningChat ? parsePlanningResult(output) : undefined;
               if (effectiveKind === 'memory') parseMemory(output);
               if (effectiveKind === 'prepare' && !step.intermediate) parsePreparation(output);
-              if (step.stage === 'train-judge') parseEvaluation(output, job.training!.cases.length);
               const creationOptions = job.creationTask ? parseCreationOptions(output, job.creationTask.stage) : undefined;
               commit(s => {
                 const item = s.jobs.find(j => j.id === id), part = item?.steps.find(p => p.id === step.id);
@@ -203,14 +202,15 @@ export function useWorkspace() {
       buildPrompt(current, job, job.steps[0], config);
     }
     if (job.kind === 'train') {
-      if (!options.training) throw new Error('请选择 Skill 和评分原文');
-      const skill = current.skills.find(s => s.id === options.training!.skillId);
+      if (!options.training) throw new Error('请选择 Skill 和原文章节');
+      const training = options.training.mode === 'scenario' ? scenarioTraining(current, options.training.parentJobId ?? '') : options.training;
+      const skill = current.skills.find(s => s.id === training.skillId);
       if (!skill) throw new Error('Skill 已移除');
       if (current.jobs.some(j => j.training?.skillId === skill.id && ['queued', 'running', 'waiting', 'paused'].includes(j.status))) throw new Error('该 Skill 已有未完成的训练任务');
-      job.training = structuredClone(options.training);
+      job.training = structuredClone(training);
       job.training.initialSkill = skillText(skill); job.training.bestSkill = job.training.initialSkill;
       job.training = validateTraining(job.training);
-      job.sourceText = ''; // Originals are isolated from writers; scenario generation, evaluation and revision use explicit prompts.
+      job.sourceText = ''; // References are explicitly supplied only to brief generation and Skill revision.
       initializeTraining(job);
     } else {
       prepareAnalysis(job, config); prepareWriting(job);
@@ -315,18 +315,18 @@ export function useWorkspace() {
     job.sourceTitle = title; job.status = 'queued';
     update(s => s.jobs.unshift(job)); notify('任务已添加'); return job.id;
   }, [notify, update]);
-  const scoreTraining = useCallback((id: string, scores: number[], feedback: string) => {
+  const scoreTraining = useCallback((id: string, scores: number[], feedback: string, annotations: TrainingAnnotation[] = [], satisfied = false) => {
     try {
       update(s => {
         const job = s.jobs.find(j => j.id === id);
         if (!job?.training || job.status !== 'waiting') throw new Error('当前任务无需评分');
         const part = job.steps.find(p => p.stage === 'train-judge' && p.status === 'pending');
         if (!part) throw new Error('评分步骤不存在');
-        const evaluation = parseEvaluation(JSON.stringify({ scores, feedback: feedback.trim() || '依据用户评分改进通用叙事与表达。', decision: 'auto' }), job.training.cases.length);
-        part.output = JSON.stringify(evaluation); recordEvaluation(job, part, evaluation, 'human'); job.status = 'queued';
+        recordEvaluation(job, part, { scores, feedback, annotations, satisfied, decision: 'auto' }); job.status = 'queued';
       });
       notify('评分已保存');
-    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+      return true;
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); return false; }
   }, [notify, update]);
   const resumeJob = useCallback((id: string, restart = false) => {
     if (controllers.current.has(id)) return;
