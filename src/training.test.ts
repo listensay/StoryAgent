@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createJob, emptyWorkspace, parseWorkspace, type Job, type JobStep, type TrainingAnnotation } from './domain';
+import { createJob, emptyWorkspace, parseWorkspace, wordCount, type Job, type JobStep, type TrainingAnnotation } from './domain';
 import { parseSkills } from './skills';
-import { applyBestSkill, continueTraining, finishTrainingStep, initializeTraining, parseEvaluation, recordEvaluation, scenarioTraining, trainingPrompt, validateTraining } from './training';
+import { adoptTrainingSkill, applyBestSkill, continueTraining, finishTrainingStep, generateTrainingRevision, initializeTraining, parseEvaluation, parseTrainingRevision, recordEvaluation, scenarioTraining, skillText, trainingPrompt, trainingResourceSelection, validateTraining } from './training';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 const rules = '---\nname: narrative\ndescription: 通用创作规则\n---\n先建立人物目标，再引入有代价的阻碍。';
 const original = '城市里的钟表忽然全部停摆，主角林舟从旧信封里发现了一张通往未来的车票，但背面写着他十年前遗失的姓名。他赶到车站，发现售票员早已知道他的来意。';
@@ -43,6 +43,134 @@ function runTraining(job: Job, request: (step: JobStep, prompt: string, signal: 
     });
   });
 }
+describe('提炼 Skill 的训练资源', () => {
+  const revisionData = { name: '对白与动作承接', description: '通过人物言行呈现不同诉求。', profile: '叙述直白，对白符合人物身份，用动作承接回应。', expression: [{ title: '动作显露未说出的诉求', guideline: '人物掩饰想法时，在台词后用一个具体动作给对方留下回应的依据。', example: '“不用送。”她关门前又停住，等走廊里那人先转过身。', boundary: '人物需要掩饰想法时使用；坦诚表达时保留直接的对白，不强行制造反差。' }] };
+
+  it('结构化修订保留使用边界，由 App 编写执行流程和真实资源导航', () => {
+    const { job } = setup();
+    job.training!.resourceFiles = [{ path: 'references/index.md', content: '# 写法目录' }, { path: 'references/dialogue/001.md', content: '# 对白方法' }];
+    const saved = structuredClone(job.training!.resourceFiles);
+    prepare(job); write(job); score(job, [4]);
+    const part = job.steps[job.steps.length - 1];
+    expect(trainingPrompt(job, part).user).toContain('每项明确适用边界');
+    part.output = JSON.stringify(revisionData); finishTrainingStep(job, part);
+    expect(part.output).toContain(revisionData.expression[0].boundary);
+    expect(part.output).toContain('先确认作者当前小说的设定');
+    expect(part.output).toContain('[写法目录](references/index.md)');
+    expect(part.output).not.toContain('研究依据：');
+    expect(job.training!.resourceFiles).toEqual(saved);
+    expect(parseSkills([{ path: 'SKILL.md', content: part.output }, ...saved], '训练')[0].resourceMode).toBe('relevant');
+    expect(job.steps.filter(step => step.stage === 'train-write' && step.round === 2)).toHaveLength(1);
+    expect(trainingPrompt(job, job.steps.find(step => step.stage === 'train-write' && step.round === 2)!, []).user).not.toContain(original);
+  });
+
+  it('缺少边界和编造链接的修订不能进入下一轮或覆盖 Skill', () => {
+    const { job, state, skill } = setup();
+    job.training!.resourceFiles = [{ path: 'references/index.md', content: '# 写法目录' }];
+    prepare(job); write(job); score(job, [4]);
+    const part = job.steps[job.steps.length - 1], missing = structuredClone(revisionData);
+    delete (missing.expression[0] as Partial<typeof missing.expression[0]>).boundary;
+    for (const output of [JSON.stringify(missing), JSON.stringify({ ...revisionData, profile: '[对白](references/dialogue/007.md)' }), rules + '\n[对白](references/dialogue/007.md)']) {
+      part.output = output; expect(() => finishTrainingStep(job, part)).toThrow();
+      expect(part.output).toBe(output); expect(part.status).toBe('pending');
+      expect(job.steps.some(step => step.round === 2)).toBe(false);
+    }
+    job.training!.bestSkill = part.output;
+    expect(() => adoptTrainingSkill(state, job)).toThrow('不存在的资源');
+    expect(skill.files[0].content).toBe(rules); expect(skill.revisions).toHaveLength(0);
+  });
+
+  it('修订格式重试修复完整字段，保留资源且不将失败内容传给盲写', async () => {
+    const { job } = setup(); job.training!.resourceFiles = [{ path: 'references/index.md', content: '# 写法目录' }];
+    const missing = structuredClone(revisionData); delete (missing.expression[0] as Partial<typeof missing.expression[0]>).boundary;
+    const feedback: string[] = [];
+    const result = await generateTrainingRevision(job, new AbortController().signal, async message => { feedback.push(message); return JSON.stringify(feedback.length === 1 ? missing : revisionData); });
+    expect(feedback).toHaveLength(2); expect(feedback[1]).toContain('expression.0.boundary');
+    expect(result).toContain(revisionData.expression[0].boundary); expect(result).toContain('[写法目录](references/index.md)');
+    expect(job.steps).toHaveLength(1);
+    const invalid = vi.fn(async () => 'not json');
+    await expect(generateTrainingRevision(job, new AbortController().signal, invalid)).rejects.toThrow('格式无效');
+    expect(invalid).toHaveBeenCalledTimes(3);
+  });
+
+  it('修订的连接错误与停止直接传递，旧格式的有效资源链接仍可恢复', async () => {
+    const { job } = setup(); job.training!.resourceFiles = [{ path: 'references/dialogue/001.md', content: '# 对白方法' }];
+    const request = vi.fn(async () => { throw new Error('连接失败'); });
+    await expect(generateTrainingRevision(job, new AbortController().signal, request)).rejects.toThrow('连接失败'); expect(request).toHaveBeenCalledTimes(1);
+    const controller = new AbortController(); controller.abort(new Error('停止训练'));
+    await expect(generateTrainingRevision(job, controller.signal, request)).rejects.toThrow('停止训练'); expect(request).toHaveBeenCalledTimes(1);
+    expect(parseTrainingRevision(job, rules + '\n[对白方法](references/dialogue/001.md)')).toContain('[对白方法](references/dialogue/001.md)');
+  });
+
+  it('章节训练使用完整写法，优化及采用后保留资源、历史和后续场景训练', () => {
+    const { state, skill, job } = setup();
+    const resource = { path: 'references/dialogue/001.md', content: '# 对白\n\n## 谈判时掩饰私心\n\n用报价后的具体动作揭露人物的真实在意。\n\n示例：掌柜把少了一枚的铜钱推回桌子中央。\n\n反例：动作之后又由旁白解释动机。' };
+    skill.resourceMode = 'relevant'; skill.files.push(resource);
+    job.training!.initialSkill = skillText(skill); job.training!.resourceFiles = [structuredClone(resource)];
+    prepare(job);
+    const writer = trainingPrompt(job, job.steps.find(part => part.stage === 'train-write')!).user;
+    expect(writer).toContain(resource.content); expect(writer).not.toContain(original);
+    write(job); score(job, [4], '需要具体对白');
+    const revision = job.steps[job.steps.length - 1];
+    expect(trainingPrompt(job, revision).user).toContain(resource.content);
+    revision.output = rules + '\n保留人物私心。'; finishTrainingStep(job, revision);
+    write(job, 2); score(job, [9], '达到目标', true); job.status = 'accepted';
+    applyBestSkill(state, job);
+    expect(skill.files[0].content).toBe(revision.output); expect(skill.files[1]).toEqual(resource);
+    expect(skill.resourceMode).toBe('relevant'); expect(skill.revisions[0].files).toHaveLength(2);
+    expect(scenarioTraining(state, job.id).resourceFiles).toEqual([resource]);
+    expect(parseWorkspace(JSON.stringify(state)).jobs[0].training?.resourceFiles).toEqual([resource]);
+    const historyCount = skill.revisions.length; adoptTrainingSkill(state, job);
+    expect(skill.revisions).toHaveLength(historyCount);
+    skill.files = [{ path: 'SKILL.md', content: '用户编辑' }]; adoptTrainingSkill(state, job);
+    expect(skill.files[1]).toEqual(resource);
+  });
+
+  it('训练期间修改详细资源后，自动采用保留用户的编辑', () => {
+    const { state, skill, job } = setup();
+    skill.resourceMode = 'relevant'; skill.files.push({ path: 'references/voice/001.md', content: '原有叙述口吻。' });
+    job.training!.resourceFiles = structuredClone(skill.files.slice(1)); job.training!.bestSkill = rules + '\n优化。';
+    skill.files[1].content = '用户修改了叙述口吻。';
+    expect(() => applyBestSkill(state, job)).toThrow('资源已更新');
+    expect(skill.files[1].content).toBe('用户修改了叙述口吻。');
+  });
+
+  it('资源中照抄原文的段落不能传给训练写作者', () => {
+    const { job } = setup();
+    job.training!.resourceFiles = [{ path: 'references/voice/001.md', content: original }];
+    expect(() => validateTraining(job.training!)).toThrow('资源包含原文');
+  });
+
+  it('整本书的训练资源完整保存，盲写仅加载当前任务所需的少量写法', () => {
+    const { job } = setup();
+    job.training!.resourceFiles = ['voice', 'dialogue', 'rhythm', 'scene', 'plot'].flatMap(category => Array.from({ length: 6 }, (_, index) => ({ path: `references/${category}/${index}.md`, content: `# 车站里的身份疑问\n\n适用情境：车票出现旧姓名，在车站追查身份。\n\n1. 让售票员回应。\n\n### 迁移示例\n\n他扶住窗口${category}${index}。\n\n### 反例与修正\n\n不要用旁白解释双方的关系。` })));
+    const saved = structuredClone(job.training!.resourceFiles);
+    prepare(job);
+    const writer = trainingPrompt(job, job.steps.find(part => part.stage === 'train-write')!).user;
+    const loaded = saved.filter(file => writer.includes(`资料 ${file.path}：`));
+    expect(loaded.length).toBeLessThanOrEqual(8); expect(loaded.length).toBeGreaterThan(2);
+    for (const file of loaded) expect(writer).toContain(file.content);
+    expect(writer).not.toContain(original);
+    expect(writer).toContain('当前题材、叙述者与人物身份');
+    expect(job.training!.resourceFiles).toEqual(saved);
+  });
+
+  it('盲写的适用性选择仅使用创作要求，明确选择保留完整方法，空选择不补入其他情节', () => {
+    const { job } = setup();
+    const expression = { path: 'references/dialogue/001.md', content: '对白方法、完整示例与反例。' };
+    const plot = { path: 'references/plot/002.md', content: '不适用的其他情节机制。' };
+    job.training!.resourceFiles = [expression, plot];
+    prepare(job);
+    const part = job.steps.find(step => step.stage === 'train-write')!;
+    expect(trainingResourceSelection(job, part)?.query).toBe(brief);
+    expect(trainingResourceSelection(job, part)?.query).not.toContain(original);
+    const prompt = trainingPrompt(job, part, [expression]);
+    expect(prompt.user).toContain(expression.content); expect(prompt.user).not.toContain(plot.content);
+    expect(prompt.user).not.toContain(original);
+    expect(trainingPrompt(job, part, []).user).not.toContain(expression.content);
+    expect(job.training!.resourceFiles).toEqual([expression, plot]);
+  });
+});
 describe('原文章节训练与用户反馈', () => {
   it('先提炼所选章节的内容，再只用 Skill 和提示词生成，始终等待用户评分', async () => {
     const { job } = setup(), stages: string[] = [];
@@ -50,9 +178,11 @@ describe('原文章节训练与用户反馈', () => {
       stages.push(part.stage!);
       if (part.stage === 'train-brief') {
         expect(prompt).toContain(original); expect(prompt).toContain('第一章'); expect(prompt).toContain('不改成其他人物或新的场景');
+        expect(prompt).toContain(`篇幅约 ${wordCount(original)} 字`);
         return JSON.stringify({ brief });
       }
       expect(prompt).toContain(rules); expect(prompt).toContain(brief);
+      expect(prompt).toContain(`篇幅约 ${wordCount(original)} 字`);
       for (const secret of [original, job.sourceText, job.sourceTitle]) expect(prompt).not.toContain(secret);
       return '本轮生成稿';
     })).resolves.toBe('waiting');
@@ -180,12 +310,20 @@ describe('原文章节训练与用户反馈', () => {
     const draft = restored.training!.review!; score(restored, draft.scores as number[], draft.feedback, false, draft.annotations);
     expect(restored.training!.review).toBeUndefined(); expect(restored.training!.evaluations[0].annotations).toEqual(draft.annotations);
   });
-  it('继续已完成训练后允许更新此前采用的训练版本', () => {
+  it.each([false, true])('继续已完成训练后允许更新此前采用的训练版本，详细资源模式：%s', resources => {
     const { state, job, skill } = setup(); prepare(job); write(job); score(job, [4]);
+    if (resources) {
+      skill.resourceMode = 'relevant'; skill.files.push({ path: 'references/dialogue/001.md', content: '对白应承接人物当前的诉求。' });
+      job.training!.resourceFiles = structuredClone(skill.files.slice(1));
+    }
     const revision = job.steps[job.steps.length - 1]; revision.output = rules + '\n第一次优化。'; finishTrainingStep(job, revision); write(job, 2); score(job, [6], '', true);
     job.status = 'accepted'; applyBestSkill(state, job); expect(skill.files[0].content).toBe(revision.output);
     continueTraining(job); const next = job.steps[job.steps.length - 1]; next.output = rules + '\n第二次优化。'; finishTrainingStep(job, next); write(job, 3); score(job, [8], '', true);
     applyBestSkill(state, job); expect(skill.files[0].content).toBe(next.output); expect(skill.revisions).toHaveLength(2);
+    if (resources) {
+      expect(skill.files.slice(1)).toEqual(job.training!.resourceFiles);
+      expect(skill.revisions.every(item => item.files.length === 2)).toBe(true);
+    }
   });
 });
 describe('用户确认后进行其他场景训练', () => {

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { acceptedChapter, newChapter, now, uid, type Job, type JobStep, type Project, type TaskKind, type Workspace } from './domain';
 import { parseSkills } from './skills';
 import { relationByNames, resolveCharacterRelation } from './characterRelations';
+import { composedSkillText, extractedSkillFiles, parseSkillComposition, parseSkillResearch, skillSnapshot } from './skillExtraction';
+import { researchText } from './skillExtractionData';
 
 export function contentHash(text: string) {
   let a = 2166136261, b = 5381;
@@ -120,14 +122,25 @@ export function acceptPreparation(state: Workspace, job: Job, step: JobStep) {
   }
 }
 export function saveExtractedSkill(state: Workspace, job: Job, output: string) {
-  const id = `extracted-${job.id}`;
-  if (state.skills.some(s => s.id === id)) return;
-  const content = output.trim().replace(/^```(?:markdown|md)?\s*\n/, '').replace(/\n```$/, '');
-  const parsed = parseSkills([{ path: 'SKILL.md', content }], job.sourceTitle)[0];
-  state.skills.unshift({ ...parsed, id, name: `${job.sourceTitle || parsed.name} · Skill`, originReferenceId: job.sourceId, version: '1.0', enabled: false, tasks: ['draft', 'continue', 'rewrite', 'plan'] });
+  const id = job.skillTarget?.id ?? `extracted-${job.id}`;
+  if (state.skills.some(s => s.extractionJobId === job.id || (!job.skillTarget && s.id === id))) return;
+  const existing = state.skills.find(skill => skill.id === id);
+  if (job.skillTarget && (!existing || skillSnapshot(existing) !== job.skillTarget.snapshot)) throw new Error('Skill 已更新，请重新提取');
+  const files = extractedSkillFiles(job, output);
+  const parsed = parseSkills(files, job.sourceTitle)[0];
+  const skill: typeof parsed = { ...parsed, id, extractionJobId: job.id, name: existing?.name ?? `${job.sourceTitle || parsed.name} · Skill`, originReferenceId: job.sourceId, version: existing ? now() : '1.0', enabled: existing?.enabled ?? false, tasks: existing?.tasks ?? ['draft', 'continue', 'rewrite', 'plan'], revisions: existing ? [{ version: existing.version, files: existing.files, savedAt: now() }, ...existing.revisions].slice(0, 5) : [] };
+  if (existing) state.skills[state.skills.indexOf(existing)] = skill;
+  else state.skills.unshift(skill);
 }
 export function finishAutomaticStep(state: Workspace, job: Job, step: JobStep) {
-  if (job.kind === 'style' && !step.intermediate) { saveExtractedSkill(state, job, step.output); step.status = 'accepted'; }
+  if (job.kind === 'style' && step.stage === 'style-research' && (!step.research || step.output !== researchText(step.research))) {
+    step.research = parseSkillResearch(step.output, step.section);
+    step.output = researchText(step.research);
+  }
+  if (job.kind === 'style' && !step.intermediate) {
+    if (step.stage === 'style-compose' && step.output.trim().startsWith('{')) step.output = composedSkillText(parseSkillComposition(step.output, job));
+    saveExtractedSkill(state, job, step.output); step.status = 'accepted';
+  }
   if (job.kind === 'memory' && !step.intermediate) {
     const project = state.projects.find(p => p.id === job.projectId), chapter = project?.chapters.find(c => c.id === step.chapterId);
     if (!project || !chapter || chapter.content !== step.baseContent) throw new Error('正文已更新，请重新生成记忆');

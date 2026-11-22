@@ -6,7 +6,7 @@ import { JobCard } from '../JobCard';
 import { Markdown } from '../Markdown';
 import { TrainingText } from '../TrainingText';
 import { importChapters, now, type Job, type TrainingAnnotation } from '../domain';
-import { scenarioTraining, skillText, trainingCandidate, trainingOriginal } from '../training';
+import { adoptTrainingSkill, scenarioTraining, skillText, trainingCandidate, trainingOriginal } from '../training';
 import type { Store } from '../useWorkspace';
 
 export function Training({ store, onSettings, focusJobId }: { store: Store; onSettings: () => void; focusJobId?: string }) {
@@ -59,11 +59,8 @@ function TrainingResult({ job, store, focused }: { job: Job; store: Store; focus
     catch (error) { store.notify(error instanceof Error ? error.message : String(error)); }
   };
   const adopt = () => {
-    store.update(s => {
-      const skill = s.skills.find(k => k.id === training.skillId); if (!skill || skillText(skill) === training.bestSkill) return;
-      skill.revisions.unshift({ version: skill.version, files: structuredClone(skill.files), savedAt: now() });
-      skill.files = [{ path: 'SKILL.md', content: training.bestSkill }]; skill.version = `训练 · ${training.bestScore}`;
-    }); store.notify('已采用最佳 Skill');
+    try { store.update(s => adoptTrainingSkill(s, job)); store.notify('已采用最佳 Skill'); }
+    catch (error) { store.notify(error instanceof Error ? error.message : String(error)); }
   };
   const completeScores = scores.length === training.cases.length && scores.every(score => typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 10);
   return <Paper className="surface"><Stack gap="lg"><Group justify="space-between"><Stack gap={4}><Title order={3}>{job.sourceTitle}</Title><Text size="sm" c="dimmed">{training.mode === 'scenario' ? '其他场景训练' : training.chapterTitle ?? '原文章节训练'}</Text></Stack>{training.bestScore >= 0 && <Text fw={600}>最佳 {training.bestScore.toFixed(1)} / 10</Text>}</Group>

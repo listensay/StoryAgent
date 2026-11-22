@@ -63,7 +63,7 @@ export function parseSkills(files: { path: string; content: string }[], source: 
     }
     const name = metadata.name.toLowerCase();
     const tasks: TaskKind[] = /scan|扫榜/.test(name) ? ['scan'] : /analy|拆文/.test(name) ? ['analyze', 'style'] : /style|风格/.test(name) ? ['style', 'draft', 'continue', 'rewrite'] : /review|deslop|审稿/.test(name) ? ['review', 'rewrite'] : /write|写作/.test(name) ? ['draft', 'continue', 'rewrite', 'plan'] : ['draft', 'continue', 'rewrite', 'plan', 'review', 'memory', 'scan', 'analyze', 'style'];
-    return { id: uid(), name: metadata.name, description: metadata.description, source: `${source}${definitions.length > 1 ? '#' + dir.replace(/\/$/, '') : ''}`, version: String(metadata.metadata?.version ?? metadata.version ?? version), enabled: true, builtin: false, tasks, files: resources.map(f => ({ path: relativePath(dir, f.path), content: f.content })), revisions: [] };
+    return { id: uid(), name: metadata.name, description: metadata.description, source: `${source}${definitions.length > 1 ? '#' + dir.replace(/\/$/, '') : ''}`, version: String(metadata.metadata?.version ?? metadata.version ?? version), enabled: true, builtin: false, tasks, ...(metadata.metadata?.storyagent?.resourceMode === 'relevant' ? { resourceMode: 'relevant' as const } : {}), files: resources.map(f => ({ path: relativePath(dir, f.path), content: f.content })), revisions: [] };
   });
 }
 export function mergeSkills(current: Skill[], incoming: Skill[]): Skill[] {

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type TaskKind, type TrainingAnnotation, type Workspace } from './domain';
+import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type Skill, type TaskKind, type TrainingAnnotation, type Workspace } from './domain';
 import { normalizeImageSelection } from './coverData';
 import { hasActiveRequests, loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
-import { buildPrompt, prepareAnalysis, synthesisSteps } from './prompts';
+import { buildPrompt, prepareAnalysis, prepareSkillExtraction, skillResourceSelections, synthesisSteps } from './prompts';
+import { generateSkillComposition, generateSkillResearch, skillSnapshot } from './skillExtraction';
+import { selectSkillResources } from './skillResources';
 import { publishJobOutput } from './jobOutput';
 import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep, writingTarget } from './jobWorkflow';
-import { applyBestSkill, continueTraining as continueTrainingJob, finishTrainingStep, initializeTraining, recordEvaluation, scenarioTraining, skillText, trainingPrompt, validateTraining } from './training';
+import { applyBestSkill, continueTraining as continueTrainingJob, finishTrainingStep, generateTrainingRevision, initializeTraining, recordEvaluation, scenarioTraining, skillText, trainingPrompt, trainingResourceSelection, validateTraining } from './training';
 import { runnableJobs } from './taskQueue';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 import { runArticleCollection, runCollection } from './collectionTask';
@@ -18,7 +20,7 @@ import { acceptPlanning, hasPlanningChanges, parsePlanningResult, planningSnapsh
 import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, undoNovel } from './novelAssistant';
 export { parseMemory } from './jobWorkflow';
 
-type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; targetWords?: number; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training']; planningChat?: boolean };
+type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; targetWords?: number; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training']; planningChat?: boolean; skillTarget?: Job['skillTarget'] };
 export function useWorkspace() {
   const [state, setState] = useState<Workspace>(emptyWorkspace);
   const stateRef = useRef(state);
@@ -114,7 +116,21 @@ export function useWorkspace() {
           await requests.run(config.providerId, signal, async () => {
             const effectiveKind = (step.stage && ['plan', 'draft', 'continue', 'rewrite', 'summary', 'memory'].includes(step.stage) ? step.stage : job.kind) as TaskKind;
             const baseOutput = job.creationTask || job.planningChat || job.novelChat || ['memory', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
-            const prompt: { system: string; user: string; skills?: NonNullable<Job['steps'][number]['execution']>['skills'] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step) : buildPrompt(current, { ...job, kind: effectiveKind }, { ...writingStep(job, step), output: baseOutput }, config);
+            const effectiveJob = { ...job, kind: effectiveKind }, effectiveStep = { ...writingStep(job, step), output: baseOutput };
+            commit(s => { const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id); if (part) part.status = 'running'; });
+            const selectionRequest = (system: string, user: string) => generate(provider!, config, system, user, signal, () => {});
+            let resourceSelections: Record<string, Skill['files']> | undefined, trainingResources: Skill['files'] | undefined;
+            if (job.training) {
+              const selection = trainingResourceSelection(job, step);
+              if (selection) trainingResources = await selectSkillResources(selection.files, selection.task, selection.query, config.contextChars, signal, selectionRequest);
+            } else if (!job.creationTask) {
+              const selections = skillResourceSelections(current, effectiveJob, effectiveStep);
+              if (selections.length) {
+                resourceSelections = {};
+                for (const selection of selections) resourceSelections[selection.id] = await selectSkillResources(selection.files, effectiveKind, selection.query, config.contextChars, signal, selectionRequest);
+              }
+            }
+            const prompt: { system: string; user: string; skills?: NonNullable<Job['steps'][number]['execution']>['skills'] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step, trainingResources) : buildPrompt(current, effectiveJob, effectiveStep, config, resourceSelections);
             if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('任务材料超过上下文上限，请调整 AI 上下文或缩小样本');
             const writing = !job.creationTask && ['draft', 'continue', 'rewrite', 'review', 'plan'].includes(job.kind) && !!step.chapterId;
             let output = baseOutput, reasoning = step.reasoning ?? '', last = 0;
@@ -132,7 +148,8 @@ export function useWorkspace() {
               }
             });
             try {
-              const result = await generate(provider!, config, prompt.system, prompt.user, signal, text => { output = baseOutput + text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } }, writing ? text => { reasoning = text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } } : undefined);
+              const request = (feedback = '') => generate(provider!, config, prompt.system, prompt.user + feedback, signal, text => { output = baseOutput + text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } }, writing ? text => { reasoning = text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } } : undefined);
+              const result = step.stage === 'style-research' ? await generateSkillResearch(step.section, signal, request) : step.stage === 'style-compose' && job.steps.some(part => part.research) ? await generateSkillComposition(job, signal, request) : job.training && step.stage === 'train-revise' ? await generateTrainingRevision(job, signal, request) : await request();
               signal.throwIfAborted();
               output = baseOutput + result;
               if (!output.trim()) throw new Error('生成结果为空');
@@ -175,6 +192,7 @@ export function useWorkspace() {
     const config = resolveAI(current.aiSelection, current.providers);
     if (options.chapterIds?.length && (!project || options.chapterIds.some(id => !project.chapters.some(c => c.id === id)))) throw new Error('章节已移除');
     const job = createJob(project, options.kind, config, chapterIds, options.instruction ?? '', options.styleId, options.sourceId, options.selection);
+    job.skillTarget = options.skillTarget;
     const source = current.references.find(r => r.id === options.sourceId);
     job.sourceText = options.sourceText ?? source?.content ?? ''; job.sourceTitle = options.sourceTitle ?? source?.title ?? project?.title ?? '';
     if (['analyze', 'scan', 'style'].includes(job.kind) && !job.sourceText && !job.steps.some(s => s.baseContent.trim())) throw new Error('暂无可分析的正文');
@@ -209,13 +227,20 @@ export function useWorkspace() {
       if (current.jobs.some(j => j.training?.skillId === skill.id && ['queued', 'running', 'waiting', 'paused'].includes(j.status))) throw new Error('该 Skill 已有未完成的训练任务');
       job.training = structuredClone(training);
       job.training.initialSkill = skillText(skill); job.training.bestSkill = job.training.initialSkill;
+      if (skill.resourceMode === 'relevant') job.training.resourceFiles = structuredClone(skill.files.filter(file => !/(^|\/)SKILL\.md$/i.test(file.path)));
       job.training = validateTraining(job.training);
       job.sourceText = ''; // References are explicitly supplied only to brief generation and Skill revision.
       initializeTraining(job);
     } else {
-      prepareAnalysis(job, config); prepareWriting(job);
+      if (job.kind === 'style') prepareSkillExtraction(job, config);
+      else prepareAnalysis(job, config);
+      prepareWriting(job);
       if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
-        for (const step of job.steps.filter(step => ['plan', 'draft', 'continue', 'rewrite'].includes(step.stage ?? ''))) buildPrompt(promptState, { ...job, kind: step.stage as TaskKind }, writingStep(job, step), config);
+        for (const step of job.steps.filter(step => ['plan', 'draft', 'continue', 'rewrite'].includes(step.stage ?? ''))) {
+          const writingJob = { ...job, kind: step.stage as TaskKind }, target = writingStep(job, step);
+          const resources = Object.fromEntries(skillResourceSelections(promptState, writingJob, target).map(({ id }) => [id, []]));
+          buildPrompt(promptState, writingJob, target, config, resources);
+        }
       }
     }
     job.status = 'queued';
@@ -224,6 +249,18 @@ export function useWorkspace() {
       s.jobs.unshift(job);
     }); notify('任务已添加'); return job.id;
   }, [notify, update]);
+  const reextractSkill = useCallback((id: string) => {
+    try {
+      const current = stateRef.current;
+      const source = current.jobs.find(job => job.id === id && job.kind === 'style');
+      if (!source) throw new Error('研究任务已移除');
+      const skill = current.skills.find(skill => skill.extractionJobId === id || skill.id === (source.skillTarget?.id ?? `extracted-${id}`));
+      if (skill && current.jobs.some(job => job.skillTarget?.id === skill.id && ['queued', 'running', 'paused'].includes(job.status))) throw new Error('该 Skill 已有未完成的提取任务');
+      const sourceText = source.sourceText || [...new Set(source.steps.map(step => step.baseContent).filter(text => text.trim()))].join('\n\n');
+      if (!sourceText.trim()) throw new Error('研究原文已移除');
+      launch({ kind: 'style', sourceId: source.sourceId, sourceText, sourceTitle: source.sourceTitle, skillTarget: skill ? { id: skill.id, snapshot: skillSnapshot(skill) } : undefined });
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  }, [launch, notify]);
   const requireIdleCreation = (current: Workspace) => {
     if (current.creationDraft && current.jobs.some(job => job.creationTask?.draftId === current.creationDraft!.id && ['queued', 'running'].includes(job.status))) throw new Error('请等待生成完成或停止生成');
   };
@@ -322,6 +359,7 @@ export function useWorkspace() {
         if (!job?.training || job.status !== 'waiting') throw new Error('当前任务无需评分');
         const part = job.steps.find(p => p.stage === 'train-judge' && p.status === 'pending');
         if (!part) throw new Error('评分步骤不存在');
+        if (!satisfied) job.ai = resolveAI(s.aiSelection, s.providers);
         recordEvaluation(job, part, { scores, feedback, annotations, satisfied, decision: 'auto' }); job.status = 'queued';
       });
       notify('评分已保存');
@@ -442,7 +480,7 @@ export function useWorkspace() {
     return true;
   }, [canUpdate]);
   const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };
