@@ -1,8 +1,15 @@
-import { taskNames, type Job, type JobStep } from './domain';
+import { taskNames, type Job, type JobStep, type Skill } from './domain';
 
 const stageNames: Record<string, string> = { plan: '细纲', draft: '正文', continue: '续写', rewrite: '改写', summary: '摘要', memory: '记忆' };
 
 export const writingStageName = (job: Job, step: JobStep) => stageNames[step.stage ?? ''] ?? taskNames[job.kind];
+
+export function writingSkillFiles(execution: NonNullable<JobStep['execution']>['skills'][number], skills: Skill[]) {
+  if (execution.contents) return execution.contents;
+  const skill = skills.find(skill => skill.id === execution.id);
+  const files = skill?.version === execution.version ? skill.files : skill?.revisions.find(revision => revision.version === execution.version)?.files;
+  return execution.files.map(path => ({ path, content: files?.find(file => file.path === path)?.content ?? '' }));
+}
 
 export function writingExecutionSummary(job: Job, step: JobStep) {
   const stage = step.stage ?? job.kind;

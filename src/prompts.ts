@@ -148,7 +148,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
     const links = resourcePaths(definition.content);
     const resources = skill.files.filter(file => !/SKILL\.md$/i.test(file.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path) && (links.some(path => file.path === path || file.path.endsWith('/' + path)) || taskTerms[job.kind].test(file.path)));
     selectedRules += `\n<skill name=${JSON.stringify(skill.name)} source="作者选用">\n${definition.content}${resources.map(file => `\n资料 ${file.path}：\n${file.content}`).join('')}\n</skill>`;
-    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: [definition.path, ...resources.map(file => file.path)] });
+    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: [definition.path, ...resources.map(file => file.path)], contents: [definition, ...resources].map(({ path, content }) => ({ path, content })) });
   }
   const contextReserve = project && !job.novelChat ? Math.min(8000, Math.floor(config.contextChars * .3)) : 300;
   if (selectedRules && required.length + system.length + selectedRules.length + contextReserve > config.contextChars) throw new Error('所选 Skill 与任务材料超过上下文上限，请减少所选 Skill 或增大 AI 上下文');
@@ -174,7 +174,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
     }
     const section = (header + rules + materials + footer).slice(0, budget);
     system += section; available -= section.length;
-    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: loadedFiles });
+    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: loadedFiles, contents: loadedFiles.map(path => ({ path, content: skill.files.find(file => file.path === path)!.content })) });
   }
   system += selectedRules;
   let contextBudget = Math.max(0, config.contextChars - system.length - required.length - 100);

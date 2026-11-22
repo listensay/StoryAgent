@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Accordion, Anchor, Group, Loader, Paper, ScrollArea, Stack, Text } from '@mantine/core';
 import { type Job, type JobStep, type Project, taskNames, wordCount } from './domain';
 import { type Store } from './useWorkspace';
@@ -7,7 +7,7 @@ import { Check, ChevronRight, FileText, Pause, Play, Puzzle, RefreshCw, Settings
 import { JobAIEditor, JobResult } from './JobCard';
 import { Markdown } from './Markdown';
 import { useAIScroll } from './useAIScroll';
-import { writingCompleted, writingStageName } from './writingActivity';
+import { writingCompleted, writingSkillFiles, writingStageName } from './writingActivity';
 
 export function WritingChat({ job, project, store, onResult }: { job?: Job; project: Project; store: Store; onResult: (chapterId: string) => void }) {
   const { contentRef, scrollToBottom } = useAIScroll();
@@ -46,14 +46,18 @@ export function WritingChat({ job, project, store, onResult }: { job?: Job; proj
   </Stack>;
 }
 
+function ActivityPanel({ label, children }: { label: string; children: ReactNode }) {
+  return <Accordion.Panel><ScrollArea.Autosize mah="min(400px, 50vh)" type="auto" scrollbars="y" offsetScrollbars overscrollBehavior="contain" viewportProps={{ role: 'region', 'aria-label': label, tabIndex: 0 }}>{children}</ScrollArea.Autosize></Accordion.Panel>;
+}
+
 function StepActivity({ job, step, store }: { job: Job; step: JobStep; store: Store }) {
   const finished = ['ready', 'accepted'].includes(step.status);
   const running = step.status === 'running';
   const stage = writingStageName(job, step);
   const status = finished ? '已完成' : running ? step.reasoning && !step.output ? '分析中' : '生成中' : '已中断';
   return <Accordion multiple variant="default" chevron={<ChevronRight size={16} />} chevronPosition="left" className="writing-activity" styles={{ item: { border: 0 }, control: { padding: '8px 4px', borderRadius: 8 }, label: { padding: 0, order: 2 }, icon: { order: 1, marginInlineStart: 0, marginInlineEnd: 10 }, panel: { paddingLeft: 32 }, content: { padding: '8px 12px 16px' }, chevron: { marginInlineStart: 0, marginInlineEnd: 8 } }}>
-    {(step.execution || step.reasoning) && <Accordion.Item value="analysis"><Accordion.Control icon={<Sparkles size={18} />}><Group justify="space-between" wrap="nowrap" gap="sm"><Text size="sm" fw={500}>任务分析 · {step.title}</Text>{finished || step.output ? <Check size={16} color="var(--mantine-color-teal-7)" /> : running ? <Loader size={14} /> : <Pause size={16} />}</Group></Accordion.Control><Accordion.Panel><Stack gap="sm">{step.execution?.summary && <Text size="sm" c="dimmed">{step.execution.summary}</Text>}{step.reasoning && <Markdown size="sm" onError={store.notify}>{step.reasoning}</Markdown>}</Stack></Accordion.Panel></Accordion.Item>}
-    {step.execution?.skills.map(skill => <Accordion.Item key={skill.id} value={`skill-${skill.id}`}><Accordion.Control icon={<Puzzle size={18} color="var(--mantine-color-teal-7)" />}><Group justify="space-between" wrap="nowrap" gap="sm"><Text size="sm">Skill · {skill.name}</Text><Check size={16} color="var(--mantine-color-teal-7)" /></Group></Accordion.Control><Accordion.Panel><Stack gap={4}><Text size="sm" c="dimmed">版本 {skill.version}</Text>{skill.files.map(file => <Text size="sm" key={file} style={{ overflowWrap: 'anywhere' }}>{file}</Text>)}</Stack></Accordion.Panel></Accordion.Item>)}
-    <Accordion.Item value="generation"><Accordion.Control icon={<FileText size={18} />}><Group justify="space-between" wrap="nowrap" gap="sm"><Group gap="sm"><Text size="sm" fw={500}>生成{stage} · {step.title.replace(/ · (细纲|摘要|记忆)$/, '')}</Text>{step.output && <Text size="xs" c="dimmed">{wordCount(step.output).toLocaleString()} 字</Text>}</Group><Group gap="xs" wrap="nowrap"><Text size="xs" c="dimmed">{status}</Text>{finished ? <Check size={16} color="var(--mantine-color-teal-7)" /> : running ? <Loader size={14} /> : <Pause size={16} />}</Group></Group></Accordion.Control><Accordion.Panel>{step.output ? <JobResult output={step.output} generating={running} preparation={false} memory={step.stage === 'memory'} sourceText="" onError={store.notify} onCitation={() => {}} /> : <Text size="sm" c="dimmed">{running ? '正在生成' : '暂无生成内容'}</Text>}</Accordion.Panel></Accordion.Item>
+    {(step.execution || step.reasoning) && <Accordion.Item value="analysis"><Accordion.Control icon={<Sparkles size={18} />}><Group justify="space-between" wrap="nowrap" gap="sm"><Text size="sm" fw={500}>任务分析 · {step.title}</Text>{finished || step.output ? <Check size={16} color="var(--mantine-color-teal-7)" /> : running ? <Loader size={14} /> : <Pause size={16} />}</Group></Accordion.Control><ActivityPanel label={`任务分析 · ${step.title}`}><Stack gap="sm">{step.execution?.summary && <Text size="sm" c="dimmed">{step.execution.summary}</Text>}{step.reasoning && <Markdown size="sm" onError={store.notify}>{step.reasoning}</Markdown>}</Stack></ActivityPanel></Accordion.Item>}
+    {step.execution?.skills.map(skill => <Accordion.Item key={skill.id} value={`skill-${skill.id}`}><Accordion.Control icon={<Puzzle size={18} color="var(--mantine-color-teal-7)" />}><Group justify="space-between" wrap="nowrap" gap="sm"><Text size="sm">Skill · {skill.name}</Text><Check size={16} color="var(--mantine-color-teal-7)" /></Group></Accordion.Control><ActivityPanel label={`Skill · ${skill.name}`}><Stack gap="md"><Text size="xs" c="dimmed">版本 {skill.version}</Text>{writingSkillFiles(skill, store.state.skills).map(file => <Stack gap="xs" key={file.path}><Text size="sm" fw={500} style={{ overflowWrap: 'anywhere' }}>{file.path}</Text>{file.content ? <Markdown size="sm" onError={store.notify}>{file.content}</Markdown> : <EmptyState minHeight={100}>暂无内容</EmptyState>}</Stack>)}</Stack></ActivityPanel></Accordion.Item>)}
+    <Accordion.Item value="generation"><Accordion.Control icon={<FileText size={18} />}><Group justify="space-between" wrap="nowrap" gap="sm"><Group gap="sm"><Text size="sm" fw={500}>生成{stage} · {step.title.replace(/ · (细纲|摘要|记忆)$/, '')}</Text>{step.output && <Text size="xs" c="dimmed">{wordCount(step.output).toLocaleString()} 字</Text>}</Group><Group gap="xs" wrap="nowrap"><Text size="xs" c="dimmed">{status}</Text>{finished ? <Check size={16} color="var(--mantine-color-teal-7)" /> : running ? <Loader size={14} /> : <Pause size={16} />}</Group></Group></Accordion.Control><ActivityPanel label={`生成${stage} · ${step.title}`}>{step.output ? <JobResult output={step.output} generating={running} preparation={false} memory={step.stage === 'memory'} sourceText="" onError={store.notify} onCitation={() => {}} /> : <EmptyState minHeight={100}>{running ? '正在生成' : '暂无生成内容'}</EmptyState>}</ActivityPanel></Accordion.Item>
   </Accordion>;
 }

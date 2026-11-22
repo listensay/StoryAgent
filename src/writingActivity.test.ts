@@ -4,7 +4,7 @@ import { requestBody, StreamParser } from './ai';
 import { prepareWriting } from './jobWorkflow';
 import { buildPrompt } from './prompts';
 import { publishJobOutput } from './jobOutput';
-import { writingCompleted } from './writingActivity';
+import { writingCompleted, writingSkillFiles } from './writingActivity';
 
 describe('writing activity persistence and completion', () => {
   it('keeps analysis separate from the manuscript and restores execution snapshots', () => {
@@ -35,11 +35,45 @@ describe('writing activity persistence and completion', () => {
     const job = createJob(project, 'draft', config, [project.chapters[0].id], '');
     const skill = state.skills.find(skill => skill.id === 'builtin-draft')!;
     skill.files.push({ path: 'references/unrelated.txt', content: '未读取资料' });
-    expect(buildPrompt(state, job, job.steps[0], config).skills).toEqual([{ id: skill.id, name: skill.name, version: skill.version, files: ['SKILL.md', 'references/unrelated.txt'] }]);
+    expect(buildPrompt(state, job, job.steps[0], config).skills).toEqual([{ id: skill.id, name: skill.name, version: skill.version, files: ['SKILL.md', 'references/unrelated.txt'], contents: skill.files }]);
     const memory = buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config);
     expect(memory.skills.map(skill => skill.id)).not.toContain('builtin-draft');
     state.skills.find(skill => skill.id === 'builtin-review')!.enabled = false;
     expect(buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config).skills).toEqual([]);
+  });
+
+  it('preserves selected skill definitions and loaded resources after edits or removal', () => {
+    const state = emptyWorkspace(), project = newProject('测试小说', 'long'); state.projects.push(project);
+    const skill = state.skills.find(skill => skill.id === 'builtin-draft')!;
+    skill.files = [
+      { path: 'SKILL.md', content: '# 写作规则\n\n使用 [场景资料](references/scenes.md)。' },
+      { path: 'references/scenes.md', content: '场景从角色行动开始。' },
+      { path: 'scripts/run.py', content: '未调用脚本' },
+      { path: 'references/other.md', content: '未调用资料' },
+    ];
+    project.skillIds = [skill.id];
+    const config = { ...newAISelection(), ...defaultAdvanced() };
+    const job = createJob(project, 'draft', config, [project.chapters[0].id], ''); state.jobs.push(job);
+    const loaded = buildPrompt(state, job, job.steps[0], config).skills;
+    const expected = structuredClone(skill.files.slice(0, 2));
+    expect(loaded[0].contents).toEqual(expected);
+    job.steps[0].execution = { summary: '任务分析', skills: loaded, startedAt: '2026-11-22T00:00:00Z' };
+    skill.files[0].content = '修改后的规则';
+    state.skills = [];
+    const restored = parseWorkspace(JSON.stringify(state));
+    expect(writingSkillFiles(restored.jobs[0].steps[0].execution!.skills[0], restored.skills)).toEqual(expected);
+  });
+
+  it('resolves older task files from the matching skill version without using newer content', () => {
+    const state = emptyWorkspace(), skill = state.skills.find(skill => skill.id === 'builtin-draft')!;
+    const execution = { id: skill.id, name: skill.name, version: skill.version, files: ['SKILL.md'] };
+    const original = structuredClone(skill.files);
+    expect(writingSkillFiles(execution, state.skills)).toEqual(original);
+    skill.revisions.push({ version: skill.version, files: original, savedAt: '2026-11-22T00:00:00Z' });
+    skill.version = '2.0'; skill.files = [{ path: 'SKILL.md', content: '新版规则' }];
+    expect(writingSkillFiles(execution, state.skills)).toEqual(original);
+    skill.revisions = [];
+    expect(writingSkillFiles(execution, state.skills)).toEqual([{ path: 'SKILL.md', content: '' }]);
   });
 });
 
