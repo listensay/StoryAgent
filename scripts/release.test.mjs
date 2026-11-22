@@ -152,14 +152,19 @@ it('does not stage edits made by another process during validation', async () =>
   }
 });
 
-it('does not report success when Actions fails or the Release lacks updater assets', async () => {
+it('does not report success when Actions fails', async () => {
   const failed = await fixture({ fail: (command, args) => command === 'gh' && args[1] === 'watch' });
   await expect(release(failed.dependencies)).rejects.toThrow('Command failed');
   expect(failed.logs.some(text => text.startsWith('Published'))).toBe(false);
   expect(await failed.git('tag', '--list')).toBe('v0.1.1');
-  for (const options of [{ draft: true }, { omitAsset: 'latest.json' }, { omitAsset: 'storyagent_0.1.1_windows_x64-setup.exe.sig' }]) {
-    const incomplete = await fixture(options);
-    await expect(release(incomplete.dependencies)).rejects.toThrow('complete published');
-    expect(incomplete.logs.some(text => text.startsWith('Published'))).toBe(false);
-  }
-});
+}, 15000);
+
+it.each([
+  ['draft release', { draft: true }],
+  ['missing manifest', { omitAsset: 'latest.json' }],
+  ['missing signature', { omitAsset: 'storyagent_0.1.1_windows_x64-setup.exe.sig' }],
+])('does not report success for a %s', async (_reason, options) => {
+  const incomplete = await fixture(options);
+  await expect(release(incomplete.dependencies)).rejects.toThrow('complete published');
+  expect(incomplete.logs.some(text => text.startsWith('Published'))).toBe(false);
+}, 15000);
