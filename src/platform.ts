@@ -4,6 +4,16 @@ import { researchCatalogSchema, researchTextSchema } from './researchSources';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { emptyWorkspace, parseWorkspace, type Workspace, uid } from './domain';
+import { proxySettingsSchema, type ProxyDetection, type ProxySettings } from './proxy';
+
+export function detectProxy(): Promise<ProxyDetection> {
+  return invoke('detect_proxy');
+}
+export async function validateProxySettings(settings: ProxySettings): Promise<ProxySettings> {
+  const parsed = proxySettingsSchema.safeParse(settings);
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? '代理设置无效');
+  return proxySettingsSchema.parse(await invoke('validate_proxy_settings', { settings: parsed.data }));
+}
 
 export async function loadWorkspace(): Promise<Workspace> {
   const raw = await invoke<string | null>('load_workspace');
@@ -51,7 +61,14 @@ export async function http(request: Request): Promise<{ text: string; bytes: Uin
   } finally { unlisten(); request.signal?.removeEventListener('abort', abort); }
 }
 function errorText(text: string, status: number) {
-  try { const json = JSON.parse(text); return `HTTP ${status}：${json.error?.message ?? json.message ?? text.slice(0, 300)}`; } catch { return `HTTP ${status}：${text.replace(/<[^>]+>/g, '').slice(0, 200)}`; }
+  let message: unknown;
+  try {
+    const json = JSON.parse(text);
+    message = json?.error?.message ?? (typeof json?.error === 'string' ? json.error : json?.message);
+  } catch { message = text.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<style\b[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ''); }
+  const detail = typeof message === 'string' ? message.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+  const fallback = status === 408 || status === 504 ? '服务响应超时，请稍后重试' : status === 429 ? '请求过于频繁，请稍后重试' : status >= 500 ? '服务暂时不可用，请稍后重试' : '请求失败';
+  return `HTTP ${status}：${detail || fallback}`;
 }
 export type InputFile = { name: string; bytes: Uint8Array };
 export async function pickCover(): Promise<InputFile | null> {

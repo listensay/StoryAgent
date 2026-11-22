@@ -4532,20 +4532,25 @@ version = "0.1.2"
 dependencies = [
  "encoding_rs",
  "futures-util",
+ "hyper-util",
  "keyring",
  "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "rfd",
  "rusqlite",
+ "rustls",
  "scraper",
  "security-framework 3.7.0",
  "serde",
  "serde_json",
+ "system-configuration",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tokio",
+ "windows-registry",
 ]
 
 [[package]]

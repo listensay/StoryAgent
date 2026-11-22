@@ -317,7 +317,7 @@ impl PageFetchError {
 }
 async fn fetch_html(rule: &ArticleRule, url: Url, body: Option<String>, search: bool) -> Result<(String, Url), String> {
     let site = site_url(&rule.site_url)?;
-    let client = Client::builder()
+    let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {

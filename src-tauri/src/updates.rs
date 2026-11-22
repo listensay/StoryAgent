@@ -1,6 +1,33 @@
 use reqwest::{Client, StatusCode, Url};
+use serde::Serialize;
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager, ResourceId, Webview};
+use tauri_plugin_updater::UpdaterExt;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMetadata {
+    rid: ResourceId,
+    current_version: String,
+    version: String,
+    body: Option<String>,
+    date: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+#[tauri::command]
+pub async fn check_app_update(webview: Webview) -> Result<Option<UpdateMetadata>, String> {
+    let updater = webview.updater_builder().timeout(Duration::from_secs(30))
+        .configure_client(crate::proxy::configure_updater).build().map_err(|error| error.to_string())?;
+    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else { return Ok(None); };
+    let current_version = update.current_version.clone();
+    let version = update.version.clone();
+    let body = update.body.clone();
+    let raw_json = update.raw_json.clone();
+    let date = raw_json.get("pub_date").and_then(|value| value.as_str()).map(str::to_string);
+    let rid = webview.resources_table().add(update);
+    Ok(Some(UpdateMetadata { rid, current_version, version, body, date, raw_json }))
+}
 
 fn github_repository(endpoint: &Url) -> Option<String> {
     if endpoint.scheme() != "https" || endpoint.host_str() != Some("github.com") {
@@ -45,7 +72,7 @@ pub async fn diagnose_update_source(app: AppHandle) -> Result<String, String> {
     let endpoint = config.get("updater").and_then(|updater| updater.get("endpoints"))
         .and_then(|endpoints| endpoints.get(0)).and_then(|endpoint| endpoint.as_str()).ok_or("更新地址未配置")?;
     let endpoint = Url::parse(endpoint).map_err(|_| "更新地址无效")?;
-    let client = Client::builder().user_agent("StoryAgent-Updater")
+    let client = crate::proxy::client_builder().user_agent("StoryAgent-Updater")
         .timeout(Duration::from_secs(10)).connect_timeout(Duration::from_secs(5))
         .build().map_err(|_| "无法连接更新服务器")?;
     let source_status = status(&client, endpoint.clone()).await?;

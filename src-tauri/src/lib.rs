@@ -1,5 +1,6 @@
 mod articles;
 mod network;
+mod proxy;
 mod research;
 mod rankings;
 mod storage;
@@ -29,6 +30,9 @@ pub fn run() {
             network::http_request,
             network::cancel_http,
             network::has_active_requests,
+            proxy::detect_proxy,
+            proxy::validate_proxy_settings,
+            updates::check_app_update,
             updates::diagnose_update_source,
             articles::validate_article_rule,
             articles::read_article_page,

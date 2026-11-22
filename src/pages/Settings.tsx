@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArticleCollection } from './ArticleCollection';
 import { ProviderEditor, protocols } from './ProviderEditor';
 import { ImageProviderEditor } from './ImageProviderEditor';
+import { ProxySettingsSection } from './ProxySettings';
 import { type ImageProvider } from '../coverData';
 import { Download, Plus, Server, Trash2, Upload } from '../icons';
 import { Paper, UnstyledButton, Title, Button, Confirm, EmptyState, IconButton, ModalPresence, Badge, Switch } from '../components';
@@ -29,6 +30,7 @@ export function Settings({ store }: { store: Store }) {
     store.update(s => { const index = s.imageProviders.findIndex(p => p.id === value.id); if (index < 0) s.imageProviders.push(value); else s.imageProviders[index] = value; }); setImageEditor(undefined);
   };
   return <div className="page settings-page">
+    <ProxySettingsSection store={store} />
     <Paper component="section" className="surface"><div className="section-heading"><Title order={2}>AI 供应商</Title><Button primary icon={Plus} onClick={() => editProvider()}>添加供应商</Button></div>{!store.state.providers.length && <EmptyState>暂无 AI 供应商</EmptyState>}<div className="settings-list">{store.state.providers.map(p => <article key={p.id} className="settings-row"><span className="item-icon"><Server size={21} /></span><UnstyledButton className="item-main" onClick={() => editProvider(p)}><Title order={3}>{p.name}<Badge>{protocols.find(o => o.value === p.protocol)?.label}</Badge></Title><p>{p.baseUrl}</p><small>{p.models.length} 个模型 · {p.hasKey ? '密钥已设置' : '未设置密钥'}</small></UnstyledButton><Switch aria-label={`启用${p.name}`} checked={p.enabled} onChange={e => store.update(s => { s.providers.find(i => i.id === p.id)!.enabled = e.target.checked; })} /><Button onClick={() => editProvider(p)}>编辑</Button><IconButton icon={Trash2} label={`删除${p.name}`} onClick={() => setRemove(p)} /></article>)}</div></Paper>
     <Paper component="section" className="surface"><div className="section-heading"><Title order={2}>图片供应商</Title><Button primary icon={Plus} onClick={() => editImageProvider()}>添加供应商</Button></div>{!store.state.imageProviders.length && <EmptyState minHeight={100}>暂无图片供应商</EmptyState>}<div className="settings-list">{store.state.imageProviders.map(p => <article key={p.id} className="settings-row"><span className="item-icon"><Server size={21} /></span><UnstyledButton className="item-main" onClick={() => editImageProvider(p)}><Title order={3}>{p.name}<Badge>OpenAI 兼容</Badge></Title><p>{p.baseUrl}</p><small>{p.models.length} 个模型 · {p.hasKey ? '密钥已设置' : '未设置密钥'}</small></UnstyledButton><Switch aria-label={`启用图片供应商${p.name}`} checked={p.enabled} onChange={e => store.update(s => { s.imageProviders.find(value => value.id === p.id)!.enabled = e.target.checked; })} /><Button onClick={() => editImageProvider(p)}>编辑</Button><IconButton icon={Trash2} label={`删除图片供应商${p.name}`} onClick={() => setRemoveImage(p)} /></article>)}</div></Paper>
     <ArticleCollection store={store} />

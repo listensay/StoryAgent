@@ -3,7 +3,7 @@ use crate::{
     rankings::{clear_text, field, script_json, valid_id},
 };
 use futures_util::StreamExt;
-use reqwest::{Client, Url};
+use reqwest::Url;
 use scraper::{Html, Selector};
 use serde::Serialize;
 use serde_json::Value;
@@ -236,7 +236,7 @@ async fn fetch(url: &str) -> Result<String, String> {
     } else {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     };
-    let client = Client::builder()
+    let client = crate::proxy::client_builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {

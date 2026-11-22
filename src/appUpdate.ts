@@ -1,7 +1,7 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
+import { type DownloadEvent, Update } from '@tauri-apps/plugin-updater';
 
 export type UpdateStatus = 'idle' | 'checking' | 'current' | 'unpublished' | 'available' | 'downloading' | 'ready' | 'waiting' | 'installing' | 'restarting' | 'error';
 export type UpdateState = { status: UpdateStatus; currentVersion: string; version: string; downloaded: number; total?: number; error: string };
@@ -141,7 +141,10 @@ export function updateCheckError(error: unknown): string {
 }
 
 export async function checkAppUpdate(
-  pluginCheck: () => Promise<UpdateHandle | null> = () => check({ timeout: 30000 }),
+  pluginCheck: () => Promise<UpdateHandle | null> = async () => {
+    const metadata = await invoke<ConstructorParameters<typeof Update>[0] | null>('check_app_update');
+    return metadata ? new Update(metadata) : null;
+  },
   diagnose: () => Promise<string> = () => invoke('diagnose_update_source'),
 ): Promise<UpdateHandle | null | 'unpublished'> {
   try { return await pluginCheck(); }

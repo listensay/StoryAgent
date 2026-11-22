@@ -17,16 +17,24 @@ pub fn load_workspace(app: AppHandle) -> Result<Option<String>, String> {
         .prepare("SELECT data FROM workspace WHERE id=1")
         .map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-    rows.next()
+    let data: Option<String> = rows.next()
         .map_err(|e| e.to_string())?
         .map(|row| row.get(0).map_err(|e| e.to_string()))
-        .transpose()
+        .transpose()?;
+    let value = match &data {
+        Some(raw) => serde_json::from_str(raw).map_err(|_| "项目数据无效")?,
+        None => serde_json::Value::Null,
+    };
+    crate::proxy::apply_settings(crate::proxy::ProxySettings::from_workspace(&value)?);
+    Ok(data)
 }
 
 #[tauri::command]
 pub fn save_workspace(app: AppHandle, data: String) -> Result<(), String> {
-    serde_json::from_str::<serde_json::Value>(&data).map_err(|_| "项目数据无效".to_string())?;
+    let value = serde_json::from_str::<serde_json::Value>(&data).map_err(|_| "项目数据无效".to_string())?;
+    let proxy = crate::proxy::ProxySettings::from_workspace(&value)?;
     connection(&app)?.execute("INSERT INTO workspace(id,data) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET data=excluded.data", params![data]).map_err(|e| e.to_string())?;
+    crate::proxy::apply_settings(proxy);
     Ok(())
 }
 
