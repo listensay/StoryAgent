@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type TaskKind, type Workspace } from './domain';
 import { normalizeImageSelection } from './coverData';
-import { loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
+import { hasActiveRequests, loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
 import { buildPrompt, prepareAnalysis, synthesisSteps } from './prompts';
 import { publishJobOutput } from './jobOutput';
+import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep, writingTarget } from './jobWorkflow';
 import { applyBestSkill, finishTrainingStep, initializeTraining, parseEvaluation, recordEvaluation, skillText, trainingPrompt, validateTraining } from './training';
 import { runnableJobs } from './taskQueue';
@@ -31,6 +32,7 @@ export function useWorkspace() {
   const generation = useRef(0);
   const [queueTick, setQueueTick] = useState(0);
   const mounted = useRef(true);
+  const restarting = useRef(false);
   const notify = useCallback((text: string) => { setMessage(text); setMessageId(n => n + 1); }, []);
   const update = useCallback((mutation: (draft: Workspace) => void) => {
     const next = structuredClone(stateRef.current);
@@ -63,6 +65,7 @@ export function useWorkspace() {
     const retain = (unlisten: () => void) => { if (disposed) unlisten(); else listeners.push(unlisten); };
     void appWindow.onCloseRequested(async event => {
       event.preventDefault();
+      if (restarting.current) return;
       try { await saveWorkspace(stateRef.current); controllers.current.forEach(c => c.abort()); await appWindow.destroy(); }
       catch (e) { notify(`保存失败：${String(e)}`); }
     }).then(retain).catch(e => notify(String(e)));
@@ -111,18 +114,25 @@ export function useWorkspace() {
           await requests.run(config.providerId, signal, async () => {
             const effectiveKind = (step.stage && ['plan', 'draft', 'continue', 'rewrite', 'summary', 'memory'].includes(step.stage) ? step.stage : job.kind) as TaskKind;
             const baseOutput = job.creationTask || job.planningChat || job.novelChat || ['memory', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
-            const prompt = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step) : buildPrompt(current, { ...job, kind: effectiveKind }, { ...writingStep(job, step), output: baseOutput }, config);
+            const prompt: { system: string; user: string; skills?: NonNullable<Job['steps'][number]['execution']>['skills'] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step) : buildPrompt(current, { ...job, kind: effectiveKind }, { ...writingStep(job, step), output: baseOutput }, config);
             if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('任务材料超过上下文上限，请调整 AI 上下文或缩小样本');
-            let output = baseOutput, last = 0;
+            const writing = !job.creationTask && ['draft', 'continue', 'rewrite', 'review', 'plan'].includes(job.kind) && !!step.chapterId;
+            let output = baseOutput, reasoning = step.reasoning ?? '', last = 0;
             const publish = () => {
               if (!mounted.current || generation.current !== epoch) return;
-              const next = publishJobOutput(stateRef.current, id, step.id, output);
+              const next = publishJobOutput(stateRef.current, id, step.id, output, writing ? reasoning : undefined);
               if (next === stateRef.current) return;
               stateRef.current = next; setState(next); setSaveStatus('保存中');
             };
-            commit(s => { const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id); if (part) part.status = 'running'; });
+            commit(s => {
+              const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id);
+              if (part) {
+                part.status = 'running';
+                if (writing) part.execution = { summary: writingExecutionSummary(job, step), skills: prompt.skills ?? [], startedAt: now() };
+              }
+            });
             try {
-              const result = await generate(provider!, config, prompt.system, prompt.user, signal, text => { output = baseOutput + text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } });
+              const result = await generate(provider!, config, prompt.system, prompt.user, signal, text => { output = baseOutput + text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } }, writing ? text => { reasoning = text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } } : undefined);
               signal.throwIfAborted();
               output = baseOutput + result;
               if (!output.trim()) throw new Error('生成结果为空');
@@ -137,6 +147,7 @@ export function useWorkspace() {
                 const item = s.jobs.find(j => j.id === id), part = item?.steps.find(p => p.id === step.id);
                 if (item && part) {
                   part.output = output; part.status = 'ready';
+                  if (writing) { part.reasoning = reasoning; if (part.execution) part.execution.finishedAt = now(); }
                   if (creationOptions) finishCreationRound(s, item, creationOptions);
                   else if (novelResult && !hasNovelChanges(novelResult)) part.status = 'accepted';
                   else if (planningResult && !hasPlanningChanges(planningResult)) part.status = 'accepted';
@@ -156,6 +167,7 @@ export function useWorkspace() {
     } finally { if (controllers.current.get(id) === controller) controllers.current.delete(id); setQueueTick(t => t + 1); }
   }, [update, requests]);
   const launch = useCallback((options: Launch): string => {
+    if (restarting.current) throw new Error('正在更新软件');
     const current = stateRef.current;
     const limit = options.kind === 'revise' ? 100000 : 8000;
     if ((options.instruction?.length ?? 0) > limit) throw new Error(`任务要求超过 ${limit} 字符`);
@@ -277,13 +289,13 @@ export function useWorkspace() {
       try { resolveAI(current.aiSelection, current.providers); } catch { return; }
       for (const project of current.projects) {
         const ids = project.chapters.filter(chapter => needsMemory(stateRef.current, project, chapter)).map(c => c.id);
-        if (ids.length) launch({ kind: 'memory', projectId: project.id, chapterIds: ids });
+        if (ids.length && !restarting.current) launch({ kind: 'memory', projectId: project.id, chapterIds: ids });
       }
     }, 10000);
     return () => clearTimeout(timer);
   }, [memoryKey, loaded, launch]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || restarting.current) return;
     for (const id of runnableJobs(stateRef.current.jobs, stateRef.current.providers, new Set(controllers.current.keys()))) void runJob(id);
   }, [state, loaded, runJob, queueTick]);
   const collect = useCallback((options: Omit<NonNullable<Job['collectionTask']>, 'referenceId' | 'done' | 'total'>) => {
@@ -345,7 +357,7 @@ export function useWorkspace() {
           if (!project) throw new Error('小说已移除');
           item.planningChat.base = planningSnapshot(project);
         }
-        if (restart || item.creationTask) item.steps.forEach(step => { if (step.status === 'pending') step.output = ''; });
+        if (restart || item.creationTask) item.steps.forEach(step => { if (step.status === 'pending') { step.output = ''; step.reasoning = undefined; step.execution = undefined; } });
         if (config && item.kind === 'prepare') prepareAnalysis(item, config);
       });
 
@@ -406,7 +418,18 @@ export function useWorkspace() {
     stateRef.current = workspace; setState(workspace); setLoaded(true); setLoadError(''); setSaveStatus('保存中');
     await saveWorkspace(workspace); if (stateRef.current === workspace) setSaveStatus('已保存');
   }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, stop, resumeJob, accept, undoNovelAdjustment, replace };
+  const canUpdate = useCallback(async () => !stateRef.current.jobs.some(job => ['queued', 'running'].includes(job.status)) && !await hasActiveRequests(), []);
+  const prepareUpdate = useCallback(async () => {
+    restarting.current = true;
+    if (!await canUpdate()) { restarting.current = false; return false; }
+    // Relaunch bypasses the native close handler, so persist the final snapshot first.
+    let pending: Workspace;
+    do { pending = stateRef.current; await saveWorkspace(pending); } while (pending !== stateRef.current);
+    setSaveStatus('已保存');
+    return true;
+  }, [canUpdate]);
+  const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };

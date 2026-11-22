@@ -10,6 +10,7 @@ import { Projects } from './pages/Projects';
 import './App.css';
 import { TaskList } from './TaskList';
 import { openWriting } from './jobWorkflow';
+import { AppUpdateButton } from './AppUpdateButton';
 
 const NovelAssistant = lazy(() => import('./NovelAssistantChat').then(m => ({ default: m.NovelAssistant })));
 const Writing = lazy(() => import('./pages/Writing').then(m => ({ default: m.Writing })));
@@ -26,6 +27,7 @@ function App() {
   const store = useWorkspace();
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [route, setRoute] = useState<Route>('projects');
+  const [appVersion, setAppVersion] = useState('');
   const [novelIdea, setNovelIdea] = useState('');
   const [novelGenre, setNovelGenre] = useState('');
   const [focusJob, setFocusJob] = useState<Job>();
@@ -61,13 +63,14 @@ function App() {
       <AppShell.Section grow component={ScrollArea}>
         <Stack gap={4}>{nav('projects', Library)}{project && <><Divider my="sm" /><Text size="xs" c="dimmed" px="sm" truncate title={project.title}>{project.title}</Text>{nav('write', NotebookPen)}{nav('details', Network)}{nav('outline', FileText)}{nav('memory', BookOpen)}</>}<Divider my="sm" />{nav('research', TrendingUp)}{nav('training', Puzzle)}{nav('skills', Puzzle)}</Stack>
       </AppShell.Section>
-      <AppShell.Section pt="lg">{nav('settings', Settings2)}<Text size="xs" c="dimmed" ta="center" pt="md">StoryAgent 0.1</Text></AppShell.Section>
+      <AppShell.Section pt="lg">{nav('settings', Settings2)}<Text size="xs" c="dimmed" ta="center" pt="md">StoryAgent{appVersion && ` ${appVersion}`}</Text></AppShell.Section>
     </AppShell.Navbar>
     <AppShell.Main className="main-shell">
-      <Group component="header" justify="flex-end" wrap="nowrap" hiddenFrom={projectRoute && project ? undefined : 'sm'} className="app-header">
+      <Group component="header" justify="flex-end" wrap="nowrap" className="app-header">
         <Box hiddenFrom="sm" mr="auto"><IconButton icon={List} label="打开导航" onClick={() => setNavOpened(true)} /></Box>
         {projectRoute && project && <Button primary icon={Sparkles} onClick={() => setAssistantOpen(true)}>小说 AI</Button>}
         {projectRoute && project && <Button icon={Download} onClick={() => setExporting(true)}>导出</Button>}
+        <AppUpdateButton store={store} onVersion={setAppVersion} />
       </Group>
       <Box className="main-content"><Suspense fallback={<Center h="100%" w="100%" role="status" aria-label="加载中"><Loader /></Center>}>
         {route === 'projects' && <Projects store={store} onOpen={open} onCreate={() => navigate('create')} />}

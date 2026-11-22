@@ -109,6 +109,17 @@ describe('流式重试与停止', () => {
     expect(http).toHaveBeenCalledTimes(3);
     expect(onText.mock.calls.map(([text]) => text)).toEqual(['可恢复正文']);
   });
+  it('重试替换分析内容，迟到事件不混入新一轮分析或正文', async () => {
+    const onText = vi.fn(), onReasoning = vi.fn();
+    const analysis = (text: string) => `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: text } }] })}\n\n`;
+    let stale: ((text: string) => void) | undefined;
+    vi.mocked(http).mockImplementationOnce(async request => { stale = request.onChunk; request.onChunk?.(analysis('旧的分析') + event('旧的正文')); throw new Error('断线'); }).mockImplementationOnce(async request => { stale?.(analysis('迟到分析')); request.onChunk?.(analysis('新的分析') + event('新的正文') + 'data: [DONE]\n\n'); return response(); });
+    const finished = generate(provider(1), config, '', '', new AbortController().signal, onText, onReasoning);
+    await vi.runAllTimersAsync();
+    expect(await finished).toBe('新的正文');
+    expect(onReasoning.mock.calls.map(([text]) => text)).toEqual(['旧的分析', '新的分析']);
+    expect(onText.mock.calls.map(([text]) => text)).toEqual(['旧的正文', '新的正文']);
+  });
   it('完整响应恢复尚未送达的末尾流事件，不误判断线或重试', async () => {
     const onText = vi.fn();
     vi.mocked(http).mockImplementationOnce(async request => {

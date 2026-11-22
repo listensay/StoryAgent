@@ -26,6 +26,9 @@ export function saveWorkspace(state: Workspace): Promise<void> {
 export async function saveCredential(id: string, key: string) {
   await invoke('save_credential', { id, secret: key });
 }
+export function hasActiveRequests(): Promise<boolean> {
+  return invoke('has_active_requests');
+}
 type Multipart = { fields: Record<string, string>; files: { field: string; name: string; mime: string; bytes: number[] }[] };
 type Request = { url: string; method?: string; headers?: Record<string, string>; body?: string; form?: Multipart; providerId?: string; keyHeader?: string; keyPrefix?: string; signal?: AbortSignal; onChunk?: (text: string) => void; binary?: boolean };
 export class HttpError extends Error {

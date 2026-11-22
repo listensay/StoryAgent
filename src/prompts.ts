@@ -87,7 +87,7 @@ function excerpt(text: string, limit: number, terms: RegExp): string {
   }
   return marker + chosen.sort((a, b) => a.index - b.index).map(item => item.block).join('\n\n');
 }
-export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: AIConfig): { system: string; user: string } {
+export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: AIConfig): { system: string; user: string; skills: NonNullable<JobStep['execution']>['skills'] } {
   const project = state.projects.find(p => p.id === job.projectId);
   const outputRules: Record<Job['kind'], string> = {
     revise: '按小说 AI Skill 的内容接口返回合法 JSON，一次提供所有受影响内容的修改方案。',
@@ -140,6 +140,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
   // Explicit choices keep complete definitions. A tiny built-in must not take
   // half the budget and silently erase the author's dialogue/style rules.
   const selectedSkills = skills.filter(skill => chosenSkills.includes(skill.id));
+  const loadedSkills: NonNullable<JobStep['execution']>['skills'] = [];
   let selectedRules = '';
   for (const skill of selectedSkills) {
     const definition = skill.files.find(file => /(^|\/)SKILL\.md$/i.test(file.path));
@@ -147,6 +148,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
     const links = resourcePaths(definition.content);
     const resources = skill.files.filter(file => !/SKILL\.md$/i.test(file.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path) && (links.some(path => file.path === path || file.path.endsWith('/' + path)) || taskTerms[job.kind].test(file.path)));
     selectedRules += `\n<skill name=${JSON.stringify(skill.name)} source="作者选用">\n${definition.content}${resources.map(file => `\n资料 ${file.path}：\n${file.content}`).join('')}\n</skill>`;
+    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: [definition.path, ...resources.map(file => file.path)] });
   }
   const contextReserve = project && !job.novelChat ? Math.min(8000, Math.floor(config.contextChars * .3)) : 300;
   if (selectedRules && required.length + system.length + selectedRules.length + contextReserve > config.contextChars) throw new Error('所选 Skill 与任务材料超过上下文上限，请减少所选 Skill 或增大 AI 上下文');
@@ -162,14 +164,17 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
     const contentBudget = Math.max(0, budget - header.length - footer.length);
     const rules = excerpt(definition, Math.floor(contentBudget * (resources.length ? .5 : 1)), terms);
     let remaining = contentBudget - rules.length, materials = '';
+    const loadedFiles = skill.files.filter(file => /(^|\/)SKILL\.md$/i.test(file.path)).map(file => file.path);
     for (const file of resources) {
       const label = `\n资料 ${file.path}：\n`;
       if (remaining < label.length + 60) break;
       const content = excerpt(file.content, Math.min(remaining - label.length, Math.max(200, Math.floor(contentBudget * .3))), terms);
       materials += label + content; remaining -= label.length + content.length;
+      loadedFiles.push(file.path);
     }
     const section = (header + rules + materials + footer).slice(0, budget);
     system += section; available -= section.length;
+    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: loadedFiles });
   }
   system += selectedRules;
   let contextBudget = Math.max(0, config.contextChars - system.length - required.length - 100);
@@ -182,7 +187,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
   }).join('\n') : '';
   contextBudget -= priorText.length;
   const context = (project && !job.novelChat ? projectContext(project, step, contextBudget, !!source) : '') + priorText;
-  return { system, user: task + context + source + selected + resume };
+  return { system, user: task + context + source + selected + resume, skills: loadedSkills };
 }
 function projectContext(project: Project, step: JobStep, budget: number, hasSource: boolean) {
   const index = project.chapters.findIndex(c => c.id === step.chapterId);

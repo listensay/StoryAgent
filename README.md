@@ -11,7 +11,7 @@ StoryAgent 是以小说项目为中心的 Agent 创作桌面工具，面向长�
 | 创作准备 | 管理小说信息、人物与世界设定，使用人物关系图编辑关系、拖动节点与自动布局，选择参考资料和创作 Skill，通过小说 AI 统一补全或调整简介、设定与总纲。 |
 | 故事规划 | 编写总纲、卷纲、章节与场景计划，管理情节分支，支持边写边补充设定与大纲。 |
 | 正文编辑 | 章节增删、排序、复制、自动保存，正文与细纲编辑，局部改写、版本对比与恢复。 |
-| Agent 写作 | 起草依次生成细纲、正文、摘要与记忆；支持续写、改写、审稿、章节范围、停止与恢复，由作者确认正文修订。 |
+| Agent 写作 | 通过聊天记录查看任务分析、Skill 调用与生成过程，完成后跳转至生成稿；起草依次生成细纲、正文、摘要与记忆，支持续写、改写、审稿、章节范围、停止与恢复，由作者确认正文修订。 |
 | 小说记忆 | 自动生成并更新章节摘要、正文事实、人物状态、时间线、伏笔与知情状态。 |
 | 多 AI 接入 | 配置多个供应商的 API 地址和密钥，适配 OpenAI 兼容接口、OpenAI Responses、Anthropic 与 Gemini；获取并多选模型，支持手动添加模型 ID。 |
 | 模型与推理设置 | 供应商、模型及推理方式自动保存；每个供应商可设置 AI 并发数量，并管理输出、上下文、采样及附加参数。 |
@@ -23,6 +23,7 @@ StoryAgent 是以小说项目为中心的 Agent 创作桌面工具，面向长�
 | 拆文分析 | 分析开篇、章节或全文中的人物、结构、节奏、伏笔与写作手法，长文本分段分析与逐层综合，通过段落引用定位原文。 |
 | Skill 训练营 | AI 自动生成仿写要求与迁移场景，进行原文盲写和跨场景训练；AI 或用户评分，按结果修订或重新提炼，保留最佳版本。 |
 | 全局任务 | 悬停 Logo 查看 AI 与正文采集任务，跨页面持续执行，点击返回对应页面，支持停止、恢复与失败重试。 |
+| 软件更新 | 自动检查 GitHub Release，右上角显示更新入口与下载进度；点击后校验签名，等待任务结束，保存工作区并安装、重启。 |
 | 导入与导出 | 导入 TXT、Markdown 小说，导出正文；通过 JSON 备份和恢复整个工作区。 |
 
 ## 技术栈
@@ -84,6 +85,16 @@ npm run ui:build
 ```
 
 界面资源位于 `dist/`，由 Tauri 打包到桌面应用中。
+
+## 发布与更新
+
+GitHub Actions 在推送 `v*` 版本标签时构建 macOS（Apple Silicon、Intel）、Windows x64 安装包和 Linux x64 AppImage，以及对应的签名更新包。版本标签须与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 的版本一致。所有平台构建成功后，工作流生成 `latest.json` 并发布 Release；预发布版本不进入稳定更新入口。
+
+将 App 改动提交到 `main` 后，在干净工作区执行 `npm run release`。命令默认递增修订版本，同步版本与锁文件，运行检查，提交并推送版本标签，等待 GitHub 发布完成。发布需要已登录的 [GitHub CLI](https://cli.github.com/) 和仓库签名密钥；可用 `npm run release -- 0.2.0` 指定版本，或用 `npm run release -- --dry-run` 查看计划。
+
+在仓库的 Actions Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY`，内容为与 `tauri.conf.json` 公钥对应的 Tauri 签名私钥；加密私钥同时配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。私钥应保存在仓库外，并保留安全备份。首次配置签名身份可使用 `npm run tauri signer generate -- -w ~/.tauri/storyagent.key`，将生成的公钥内容填写到 `plugins.updater.pubkey`。
+
+本地 `npm run build` 默认使用 `~/.tauri/storyagent.key` 签名，也可通过 `TAURI_SIGNING_PRIVATE_KEY` 指定其他私钥路径或内容。私钥加密时设置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。GitHub Actions 使用仓库 Secrets，不读取本地私钥。客户端从 [GitHub Releases](https://github.com/listensay/StoryAgent/releases) 获取适合当前系统和架构的更新。
 
 ## 相关入口
 

@@ -41,7 +41,7 @@ export async function getModels(provider: Provider, signal?: AbortSignal, apiKey
   if (!models.size) throw new Error('未获取到可用模型');
   return [...models].sort();
 }
-export function requestBody(provider: Provider, config: AIConfig, system: string, user: string): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
+export function requestBody(provider: Provider, config: AIConfig, system: string, user: string, includeReasoning = false): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
   validateAI(config, provider);
   const base = apiBase(provider), extra = JSON.parse(config.extra);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -53,7 +53,7 @@ export function requestBody(provider: Provider, config: AIConfig, system: string
   }
   if (provider.protocol === 'responses') {
     const body: Record<string, unknown> = { model: config.model, instructions: system, input: user, max_output_tokens: config.maxTokens, stream: true, ...extra };
-    if (config.reasoning !== 'off') body.reasoning = { effort: config.effort };
+    if (config.reasoning !== 'off') body.reasoning = { effort: config.effort, ...(includeReasoning ? { summary: 'auto' } : {}) };
     else if (config.sampling) body.temperature = config.temperature;
     return { url: base + '/responses', body, headers };
   }
@@ -70,6 +70,7 @@ export function requestBody(provider: Provider, config: AIConfig, system: string
   if (config.reasoning === 'budget') generationConfig.thinkingConfig = { thinkingBudget: config.budget };
   else if (config.reasoning === 'effort') generationConfig.thinkingConfig = { thinkingLevel: config.effort };
   else if (config.reasoning === 'adaptive') generationConfig.thinkingConfig = { thinkingBudget: -1 };
+  if (includeReasoning && config.reasoning !== 'off') Object.assign(generationConfig.thinkingConfig as object, { includeThoughts: true });
   return { url: base + '/models/' + encodeURIComponent(config.model.replace(/^models\//, '')) + ':streamGenerateContent?alt=sse', body: { ...extra, systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: user }] }], generationConfig }, headers };
 }
 type Json = Record<string, any>; // Provider event payloads have independent, evolving schemas.
@@ -93,13 +94,24 @@ export function outputText(data: Json): string {
   if (Array.isArray(data.content)) return data.content.filter((c: Json) => c.type === 'text').map((c: Json) => c.text ?? '').join('');
   return '';
 }
+export function reasoningText(data: Json): string {
+  if (data.type === 'response.reasoning_summary_text.delta') return data.delta ?? '';
+  if (data.type === 'content_block_delta' && data.delta?.type === 'thinking_delta') return data.delta.thinking ?? '';
+  if (data.type === 'content_block_start' && data.content_block?.type === 'thinking') return data.content_block.thinking ?? '';
+  if (data.choices) return data.choices.map((c: Json) => c.delta?.reasoning_content ?? c.delta?.reasoning ?? c.message?.reasoning_content ?? c.message?.reasoning ?? '').filter((s: unknown) => typeof s === 'string').join('');
+  if (data.candidates) return data.candidates.flatMap((c: Json) => c.content?.parts ?? []).filter((p: Json) => p.thought).map((p: Json) => p.text ?? '').join('');
+  if (Array.isArray(data.output)) return data.output.flatMap((o: Json) => o.type === 'reasoning' ? o.summary ?? [] : []).map((part: Json) => part.text ?? '').join('\n');
+  if (Array.isArray(data.content)) return data.content.filter((c: Json) => c.type === 'thinking').map((c: Json) => c.thinking ?? '').join('\n');
+  return '';
+}
 export class StreamParser {
   private buffer = '';
   text = '';
+  reasoning = '';
   truncated = false;
   error: Error | undefined;
   completed = false;
-  constructor(private onText: (text: string) => void) {}
+  constructor(private onText: (text: string) => void, private onReasoning?: (text: string) => void) {}
   private event(raw: string) {
     const data = raw.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n').trim();
     if (data === '[DONE]') { this.completed = true; return; }
@@ -110,6 +122,8 @@ export class StreamParser {
       let part = outputText(parsed);
       if (parsed.type === 'response.completed' && !this.text) part = outputText(parsed.response ?? {});
       if (part) { this.text += part; this.onText(this.text); }
+      const reasoning = reasoningText(parsed) || (parsed.type === 'response.completed' && !this.reasoning ? reasoningText(parsed.response ?? {}) : '');
+      if (reasoning) { this.reasoning += reasoning; this.onReasoning?.(this.reasoning); }
       if (parsed.choices?.some((c: Json) => c.finish_reason === 'length') || parsed.delta?.stop_reason === 'max_tokens' || parsed.candidates?.some((c: Json) => c.finishReason === 'MAX_TOKENS') || parsed.type === 'response.incomplete') this.truncated = true;
       if (parsed.choices?.some((c: Json) => c.finish_reason) || parsed.type === 'response.completed' || parsed.type === 'response.incomplete' || parsed.type === 'message_stop' || parsed.candidates?.some((c: Json) => c.finishReason)) this.completed = true;
     } catch (error) { this.error = error instanceof Error ? error : new Error(String(error)); }
@@ -128,14 +142,17 @@ export class StreamParser {
       let failure: unknown;
       try { complete.finish(''); } catch (error) { failure = error; }
       const changed = this.text !== complete.text;
+      const reasoningChanged = this.reasoning !== complete.reasoning;
       this.buffer = ''; this.text = complete.text; this.error = complete.error;
+      this.reasoning = complete.reasoning;
       this.completed = complete.completed; this.truncated = complete.truncated;
       if (changed && this.text) this.onText(this.text);
+      if (reasoningChanged) this.onReasoning?.(this.reasoning);
       if (failure) throw failure;
     }
     if (this.buffer.trim().startsWith('data:') || this.buffer.includes('\ndata:')) this.event(this.buffer);
     if (!this.text && raw.trim().startsWith('{')) {
-      try { const data = JSON.parse(raw); this.text = outputText(data); this.completed = true; this.truncated = data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.some((c: Json) => c.finish_reason === 'length') || data.candidates?.some((c: Json) => c.finishReason === 'MAX_TOKENS'); if (this.text) this.onText(this.text); } catch (e) { this.error = e instanceof Error ? e : new Error(String(e)); }
+      try { const data = JSON.parse(raw); this.text = outputText(data); this.reasoning = reasoningText(data); this.completed = true; this.truncated = data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.some((c: Json) => c.finish_reason === 'length') || data.candidates?.some((c: Json) => c.finishReason === 'MAX_TOKENS'); if (this.text) this.onText(this.text); if (this.reasoning) this.onReasoning?.(this.reasoning); } catch (e) { this.error = e instanceof Error ? e : new Error(String(e)); }
     }
     if (this.error) throw this.error;
     if (!this.text.trim() && this.truncated) throw new PermanentAIError('已达到输出上限，可继续生成');
@@ -144,11 +161,12 @@ export class StreamParser {
     return this.text;
   }
 }
-export async function generate(provider: Provider, config: AIConfig, system: string, user: string, signal: AbortSignal, onText: (text: string) => void): Promise<string> {
-  const request = requestBody(provider, config, system, user);
+export async function generate(provider: Provider, config: AIConfig, system: string, user: string, signal: AbortSignal, onText: (text: string) => void, onReasoning?: (text: string) => void): Promise<string> {
+  const request = requestBody(provider, config, system, user, !!onReasoning);
   return withAIRetry(provider, signal, async () => {
     // Keep the last preview until a retry actually produces replacement text.
-    const parser = new StreamParser(onText);
+    let reasoningPublished = false;
+    const parser = new StreamParser(text => { if (!reasoningPublished) { reasoningPublished = true; onReasoning?.(''); } onText(text); }, text => { reasoningPublished = true; onReasoning?.(text); });
     let active = true;
     try {
       const response = await http({ url: request.url, method: 'POST', headers: request.headers, body: JSON.stringify(request.body), providerId: provider.id, ...auth(provider), signal, onChunk: chunk => { if (active && !signal.aborted) parser.feed(chunk); } });

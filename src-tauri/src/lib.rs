@@ -3,6 +3,7 @@ mod network;
 mod research;
 mod rankings;
 mod storage;
+mod updates;
 use tauri::Manager;
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -13,6 +14,8 @@ fn greet(name: &str) -> String {
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(network::Requests::default())
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -25,6 +28,8 @@ pub fn run() {
             storage::export_file,
             network::http_request,
             network::cancel_http,
+            network::has_active_requests,
+            updates::diagnose_update_source,
             articles::validate_article_rule,
             articles::read_article_page,
             articles::search_article_books,

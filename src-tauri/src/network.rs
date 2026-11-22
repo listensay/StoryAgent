@@ -90,6 +90,11 @@ struct Chunk {
 }
 
 #[tauri::command]
+pub fn has_active_requests(state: State<'_, Requests>) -> Result<bool, String> {
+    Ok(!state.0.lock().map_err(|_| "请求状态不可用")?.active.is_empty())
+}
+
+#[tauri::command]
 pub fn cancel_http(id: String, state: State<'_, Requests>) -> Result<(), String> {
     state.0.lock().map_err(|_| "请求状态不可用")?.cancel(id);
     Ok(())
