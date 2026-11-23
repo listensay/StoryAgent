@@ -1,6 +1,6 @@
 [package]
 name = "storyagent"
-version = "0.1.15"
+version = "0.1.16"
 description = "Agent novel writing desktop application"
 authors = ["you"]
 edition = "2024"
