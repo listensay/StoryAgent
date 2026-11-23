@@ -41,6 +41,8 @@ export const trainingAnnotationSchema = z.object({
   quote: z.string().min(1).max(8000), feedback: z.string().trim().min(1).max(4000),
 }).refine(value => value.end > value.start, { message: '请选择评价片段' });
 export type TrainingAnnotation = z.infer<typeof trainingAnnotationSchema>;
+export const trainingScoreSchema = z.union([z.number().min(0).max(10), z.literal('')]);
+export type TrainingScore = z.infer<typeof trainingScoreSchema>;
 export const trainingSchema = z.object({
   skillId: z.string(), initialSkill: z.string(), bestSkill: z.string(), bestScore: z.number().default(-1),
   targetScore: z.number().min(1).max(10), judge: z.literal('human'),
@@ -48,8 +50,8 @@ export const trainingSchema = z.object({
   parentJobId: z.string().optional(), approvedAt: z.string().optional(),
   resourceFiles: z.array(skillFileSchema).optional(),
   cases: z.array(z.object({ title: z.string().min(1), brief: z.string().trim().min(1).max(8000), original: z.string() })).max(6),
-  evaluations: z.array(z.object({ round: z.number(), scores: z.array(z.number().min(0).max(10)), feedback: z.string(), decision: z.enum(['revise', 'reextract', 'keep', 'auto']), source: z.enum(['ai', 'human']), annotations: z.array(trainingAnnotationSchema).max(100).optional(), satisfied: z.boolean().optional() })),
-  review: z.object({ round: z.number().int().positive(), scores: z.array(z.union([z.number().min(0).max(10), z.literal('')])), feedback: z.string().max(8000), annotations: z.array(trainingAnnotationSchema).max(100) }).optional(),
+  evaluations: z.array(z.object({ round: z.number(), scores: z.array(trainingScoreSchema), feedback: z.string(), decision: z.enum(['revise', 'reextract', 'keep', 'auto']), source: z.enum(['ai', 'human']), annotations: z.array(trainingAnnotationSchema).max(100).optional(), satisfied: z.boolean().optional() })),
+  review: z.object({ round: z.number().int().positive(), scores: z.array(trainingScoreSchema), feedback: z.string().max(8000), annotations: z.array(trainingAnnotationSchema).max(100) }).optional(),
 }).refine(value => value.cases.length >= 1 || !!value.original?.trim(), { message: '请选择原文章节' });
 const collectionTaskSchema = z.object({ bookUrl: z.string(), title: z.string(), scope: z.enum(['opening', 'chapter', 'available']), chapterId: z.string(), rule: articleRuleSchema.optional(), referenceId: z.string(), done: z.number().default(0), total: z.number().default(0) });
 const articleTaskSchema = z.object({ url: z.string(), rule: articleRuleSchema, mode: z.enum(['catalog', 'chapter', 'range']), page: articlePageSchema.optional(), links: z.array(z.object({ title: z.string(), url: z.string() })), referenceId: z.string(), done: z.number().int().nonnegative().default(0), total: z.number().int().nonnegative().default(0) });

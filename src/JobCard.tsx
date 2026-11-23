@@ -9,7 +9,8 @@ import { Accordion, Box, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useAIScroll } from './useAIScroll';
 import { canAcceptWritingStep, parseMemory, parsePreparation, writingComparison } from './jobWorkflow';
 import { composedSkillText, parseSkillComposition } from './skillExtraction';
-const statuses = { queued: '排队中', waiting: '待评分', running: '进行中', paused: '已停止', failed: '失败', ready: '待确认', accepted: '已完成' };
+import { trainingEvaluationText } from './training';
+const statuses = { queued: '排队中', waiting: '待反馈', running: '进行中', paused: '已停止', failed: '失败', ready: '待确认', accepted: '已完成' };
 
 export function JobCard({ job, store, compact = false, focused = false }: { job: Job; store: Store; compact?: boolean; focused?: boolean }) {
   const [open, setOpen] = useState(focused || job.status !== 'accepted');
@@ -32,6 +33,8 @@ export function JobCard({ job, store, compact = false, focused = false }: { job:
   const result = (step: JobStep) => {
     if (step.stage === 'style-research' && !step.research) return <EmptyState minHeight={88}>{step.status === 'running' ? '正在提炼写法…' : '等待提炼'}</EmptyState>;
     let output = step.output;
+    const evaluation = step.stage === 'train-judge' && job.training?.evaluations.find(evaluation => evaluation.round === step.round);
+    if (evaluation && job.training) output = trainingEvaluationText(job.training, evaluation);
     if (step.stage === 'style-compose' && job.steps.some(part => part.research)) {
       if (step.status === 'running') return <EmptyState minHeight={88}>正在编写 Skill…</EmptyState>;
       if (output.trim().startsWith('{')) {

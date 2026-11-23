@@ -5,7 +5,7 @@ import { EmptyState } from './components';
 import { taskNames, type Job } from './domain';
 import { creationStageNames } from './novelCreationData';
 
-const labels: Record<Job['status'], string> = { queued: '排队中', running: '进行中', waiting: '待评分', paused: '已停止', failed: '失败', ready: '待确认', accepted: '已完成' };
+const labels: Record<Job['status'], string> = { queued: '排队中', running: '进行中', waiting: '待反馈', paused: '已停止', failed: '失败', ready: '待确认', accepted: '已完成' };
 const progress = (job: Job) => {
   const collection = job.collectionTask ?? (job.articleTask?.mode !== 'catalog' ? job.articleTask : undefined);
   return collection ? `${collection.done} / ${collection.total || '…'} 章` : `${job.steps.filter(s => ['ready', 'accepted'].includes(s.status)).length} / ${job.steps.length}`;

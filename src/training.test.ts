@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createJob, emptyWorkspace, parseWorkspace, wordCount, type Job, type JobStep, type TrainingAnnotation } from './domain';
+import { createJob, emptyWorkspace, parseWorkspace, wordCount, type Job, type JobStep, type TrainingAnnotation, type TrainingScore } from './domain';
 import { parseSkills } from './skills';
 import { adoptTrainingSkill, applyBestSkill, continueTraining, discardTrainingFeedback, finishTrainingStep, generateTrainingRevision, initializeTraining, parseEvaluation, parseTrainingRevision, recordEvaluation, scenarioTraining, skillText, startTrainingFeedback, trainingPrompt, trainingResourceSelection, trainingReview, validateTraining } from './training';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
@@ -22,7 +22,7 @@ function prepare(job: Job) {
 function write(job: Job, round = 1, content = '林舟拿起车票。他走到车站。售票员问他想去哪里。') {
   for (const part of job.steps.filter(s => s.stage === 'train-write' && s.round === round)) { part.output = content; finishTrainingStep(job, part); }
 }
-function score(job: Job, scores: number[], feedback = '冲突推进不足', satisfied = false, annotations: TrainingAnnotation[] = []) {
+function score(job: Job, scores: TrainingScore[], feedback = '冲突推进不足', satisfied = false, annotations: TrainingAnnotation[] = []) {
   const part = job.steps.find(s => s.stage === 'train-judge' && s.status === 'pending')!;
   recordEvaluation(job, part, { scores, feedback, satisfied, annotations, decision: 'auto' });
 }
@@ -201,13 +201,46 @@ describe('原文章节训练与用户反馈', () => {
     }
     prepare(job); expect(job.steps).toHaveLength(3); finishTrainingStep(job, part); expect(job.steps).toHaveLength(3);
   });
-  it('评分须完整、有效且在生成结束后提交，拒绝重复评分', () => {
+  it('评分须有效且在生成结束后提交，拒绝重复评分', () => {
     const { job } = setup(); prepare(job);
     expect(() => score(job, [5])).toThrow('等待本轮生成完成'); write(job);
     for (const scores of [[11], [-1], [], [5, 6], [NaN]]) expect(() => score(job, scores)).toThrow();
     expect(job.training!.evaluations).toHaveLength(0);
     score(job, [0], '', true); expect(job.training!.bestScore).toBe(0);
     expect(() => recordEvaluation(job, judge(job), { scores: [9], feedback: '', decision: 'auto' })).toThrow('已评分');
+  });
+  it.each(['feedback', 'annotation'])('未评分也能提交%s，完整保留并传给 Skill 修订', kind => {
+    const { state, job } = setup(); prepare(job); write(job);
+    const feedback = kind === 'feedback' ? '人物的害怕应通过挑衅行为显露。\n调整这句话的语气。' : '';
+    const annotations: TrainingAnnotation[] = kind === 'annotation' ? [{ target: 'candidate', caseIndex: 0, start: 0, end: 6, quote: '林舟拿起车票', feedback: '这里需要体现犹豫，而不是直接行动。' }] : [];
+    score(job, [''], feedback, false, annotations);
+    expect(job.training!.evaluations[0]).toMatchObject({ scores: [''], feedback, annotations, source: 'human' });
+    expect(job.training!.bestScore).toBe(-1);
+    const prompt = trainingPrompt(job, job.steps[job.steps.length - 1]).user;
+    expect(prompt).toContain(JSON.stringify(feedback || annotations[0].feedback)); expect(prompt).not.toContain('"score":');
+    if (annotations.length) { expect(judge(job).output).toContain(annotations[0].quote); expect(judge(job).output).toContain(annotations[0].feedback); }
+    expect(parseWorkspace(JSON.stringify(state)).jobs[0].training!.evaluations[0]).toEqual(job.training!.evaluations[0]);
+  });
+  it('空评价不能继续，部分评分与反馈可以提交且不当作完整评分', () => {
+    const { job } = setup('scenario'); prepare(job); write(job);
+    for (const scores of [['', '', ''], [7, '', '']] as TrainingScore[][]) expect(() => score(job, scores, ' ')).toThrow('请填写反馈');
+    expect(job.training!.evaluations).toHaveLength(0); expect(judge(job).status).toBe('pending');
+    score(job, [7, '', ''], '场景二的冲突缺少代价。');
+    expect(job.training!.bestScore).toBe(-1); expect(job.training!.evaluations[0].scores).toEqual([7, '', '']);
+    expect(judge(job).output).toContain('未评分');
+  });
+  it('未评分结束时采用用户确认的当前版本，可以进行其他场景训练', () => {
+    const { state, job, skill } = setup(); prepare(job); write(job); score(job, [''], '补充具体动作。');
+    const revision = job.steps[job.steps.length - 1]; revision.output = rules + '\n以停顿的动作表现犹豫。'; finishTrainingStep(job, revision);
+    write(job, 2); score(job, [''], '当前表达符合要求。', true); job.status = 'accepted'; applyBestSkill(state, job);
+    expect(job.training!.bestScore).toBe(-1); expect(job.training!.bestSkill).toBe(revision.output); expect(skill.files[0].content).toBe(revision.output);
+    expect(skill.version).not.toContain('-1'); expect(scenarioTraining(state, job.id).initialSkill).toBe(revision.output);
+  });
+  it('已有最佳评分时，无评分反馈不覆盖最佳版本', () => {
+    const { job } = setup(); prepare(job); write(job); score(job, [8], '补充动作。');
+    const revision = job.steps[job.steps.length - 1]; revision.output = rules + '\n新版本。'; finishTrainingStep(job, revision);
+    write(job, 2); score(job, [''], '结束本次训练。', true);
+    expect(job.training!.bestScore).toBe(8); expect(job.training!.bestSkill).toBe(rules);
   });
   it('整体反馈和原文、生成稿的准确划词片段交给 AI 调整 Skill，下一轮不携带旧稿', () => {
     const { job } = setup(); prepare(job); write(job);

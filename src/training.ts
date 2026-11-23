@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { now, uid, wordCount, trainingAnnotationSchema, trainingSchema, type Job, type JobStep, type Skill, type Workspace } from './domain';
+import { now, uid, wordCount, trainingAnnotationSchema, trainingScoreSchema, trainingSchema, type Job, type JobStep, type Skill, type Workspace, type TrainingScore } from './domain';
 import { parseJSON } from './jobWorkflow';
 import { parseSkills, resourcePaths } from './skills';
 import { composedSkillText, markRelevantResources } from './skillExtraction';
@@ -96,21 +96,29 @@ export async function generateTrainingRevision(job: Job, signal: AbortSignal, re
   }
 }
 const evaluationSchema = z.object({
-  scores: z.array(z.number().min(0).max(10)).min(1), feedback: z.string().trim().max(8000),
+  scores: z.array(trainingScoreSchema).min(1), feedback: z.string().trim().max(8000),
   decision: z.enum(['revise', 'reextract', 'keep', 'auto']),
   annotations: z.array(trainingAnnotationSchema).max(100).optional(), satisfied: z.boolean().optional(),
 });
+export const hasTrainingScores = (scores: TrainingScore[]): scores is number[] => scores.length > 0 && scores.every(score => typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 10);
+export const hasTrainingFeedback = (review: { scores: TrainingScore[]; feedback: string; annotations?: unknown[] }) => hasTrainingScores(review.scores) || !!review.feedback.trim() || !!review.annotations?.length;
 export function parseEvaluation(text: string, count: number) {
   const value = evaluationSchema.parse(parseJSON(text));
   if (value.scores.length !== count) throw new Error('评分数量与训练内容不一致');
+  if (!hasTrainingFeedback(value)) throw new Error('请填写反馈、片段评价或评分');
   return value;
+}
+export function trainingEvaluationText(training: NonNullable<Job['training']>, evaluation: NonNullable<Job['training']>['evaluations'][number]) {
+  const scores = evaluation.scores.some(score => typeof score === 'number') ? `用户评分：${evaluation.scores.map(score => score === '' ? '未评分' : `${score} / 10`).join('、')}` : '';
+  const annotations = evaluation.annotations?.map((annotation, index) => `${index + 1}. ${annotation.target === 'original' ? '原文' : '生成稿'}${training.cases.length > 1 ? ` · ${training.cases[annotation.caseIndex]?.title ?? ''}` : ''}\n${annotation.quote}\n评价：${annotation.feedback}`).join('\n\n');
+  return [scores, evaluation.feedback && `整体反馈：\n${evaluation.feedback}`, annotations && `片段评价：\n${annotations}`].filter(Boolean).join('\n\n') || '用户已结束训练';
 }
 function step(job: Job, stage: string, round: number, title: string, caseIndex?: number): JobStep {
   return { ...job.steps[0], id: uid(), title, stage, round, caseIndex, status: 'pending', output: '', intermediate: true, section: '', baseContent: '', basePlan: '', aggregate: false };
 }
 export function appendTrainingRound(job: Job, round: number) {
   job.training!.cases.forEach((c, i) => job.steps.push(step(job, 'train-write', round, `第 ${round} 轮 · ${c.title}`, i)));
-  job.steps.push(step(job, 'train-judge', round, `第 ${round} 轮 · 用户评分`));
+  job.steps.push(step(job, 'train-judge', round, `第 ${round} 轮 · 用户反馈`));
 }
 export function initializeTraining(job: Job) {
   if (!job.training!.cases.length) {
@@ -168,7 +176,7 @@ export function trainingPrompt(job: Job, part: JobStep, selectedResources?: Skil
   if (part.stage !== 'train-revise') throw new Error('未知训练步骤');
   const evaluation = training.evaluations.find(e => e.round === round);
   const action = evaluation?.decision === 'reextract' ? '重新从原文提炼' : '根据用户评分和反馈，自行判断局部修订还是重新提炼，并优化';
-  const samples = training.cases.map((c, i) => ({ title: c.title, brief: c.brief, candidate: trainingCandidate(job, round, i), score: evaluation?.scores[i] }));
+  const samples = training.cases.map((c, i) => ({ title: c.title, brief: c.brief, candidate: trainingCandidate(job, round, i), score: typeof evaluation?.scores[i] === 'number' ? evaluation.scores[i] : undefined }));
   const output = training.resourceFiles ? '详细写法资源完整沿用；App 保留执行流程、资源模式与目录链接。本次只修订有证据的文风基准与表达方法，每项明确适用边界，边界只约束对应写法。不要把单次反馈扩大为所有对白或旁白的无条件禁令，不规定所有人物维持威严、计算利益或采取同一行为。profile 描述常见表达与变化，不将参考章节的视角、独处揭底等具体安排固化为所有场景的规则；信息披露服从当前创作任务。以原文实际用词、句法和解释密度校准，不能根据题材推断华丽古风；名称使用清楚的短语。示例须改变人物目标和核心冲突，彼此使用不同的关系与困境，以新人物实际的动作和对白展示表达。换姓名、官职、工具或背景后重复相同事件不算迁移，不复演测试事件。只输出完整 JSON：{"name":"简短名称","description":"适用创作任务与阅读效果","profile":"有证据的文风基准","expression":[{"title":"表达方法","guideline":"具体使用方法","example":"原创正文短示例","boundary":"适用条件及应调整或停用的情境"}]}。各字段不写文件路径、资源链接、原文引句或章节答案，不另写执行清单。' : '将具体写法与反例放在前面，通用因果清单只作简要补充；题材专属写法注明适用条件。只输出完整 SKILL.md，含 name、description 元数据。';
   return withResources(`${action}通用小说 Skill。原文是 10 分基准，分数由用户决定，不重新评分。结合用户的整体反馈、划词片段和该轮生成稿定位问题，将改进写入 Skill，使下一轮生成能够改善。保留有证据的叙事机制，以及原文可辨认的口吻、对白、幽默或其他情绪节拍。禁止写入原作人物名、原文语句、具体章节情节、测试场景及参考答案，不将单次测试答案固化为规则。${output}\n<skill>\n${rules}\n</skill>\n用户反馈与划词评价：\n${JSON.stringify({ feedback: evaluation?.feedback, annotations: evaluation?.annotations ?? [] })}\n该轮生成内容与用户评分：\n${JSON.stringify(samples)}\n参考原文：\n${trainingOriginal(training)}`, [evaluation?.feedback, ...(evaluation?.annotations?.map(a => a.feedback) ?? []), rules].filter(Boolean).join('\n'), 'rewrite');
 }
@@ -185,10 +193,12 @@ export function recordEvaluation(job: Job, part: JobStep, input: z.infer<typeof 
   // Satisfaction is always an explicit user choice, independent of score thresholds.
   evaluation.decision = evaluation.satisfied ? 'keep' : evaluation.decision === 'keep' ? 'auto' : evaluation.decision;
   training.evaluations.push({ ...evaluation, round: part.round!, source: 'human' });
-  const score = Math.min(...evaluation.scores);
-  if (score > training.bestScore) { training.bestScore = score; training.bestSkill = roundSkill(job, part.round!); }
+  if (hasTrainingScores(evaluation.scores)) {
+    const score = Math.min(...evaluation.scores);
+    if (score > training.bestScore) { training.bestScore = score; training.bestSkill = roundSkill(job, part.round!); }
+  } else if (evaluation.satisfied && training.bestScore < 0) training.bestSkill = roundSkill(job, part.round!);
   if (evaluation.satisfied && training.mode !== 'scenario') training.approvedAt = now();
-  part.output = `用户评分：${evaluation.scores.join('、')} / 10${evaluation.feedback ? `\n\n${evaluation.feedback}` : ''}`;
+  part.output = trainingEvaluationText(training, training.evaluations[training.evaluations.length - 1]);
   part.status = 'accepted';
   training.review = undefined;
   if (!evaluation.satisfied) job.steps.push(step(job, 'train-revise', part.round!, `第 ${part.round} 轮 · 根据用户反馈调整 Skill`));
@@ -256,7 +266,7 @@ export function adoptTrainingSkill(state: Workspace, job: Job) {
   parseSkills(files, '训练');
   if (JSON.stringify(skill.files) === JSON.stringify(files)) return;
   skill.revisions = [{ version: skill.version, files: structuredClone(skill.files), savedAt: now() }, ...skill.revisions].slice(0, 5);
-  skill.version = `训练 ${new Date().toLocaleDateString('zh-CN')} · ${training.bestScore.toFixed(1)}`;
+  skill.version = `训练 ${new Date().toLocaleDateString('zh-CN')}${training.bestScore >= 0 ? ` · ${training.bestScore.toFixed(1)}` : ''}`;
   skill.files = files;
   if (training.resourceFiles) skill.resourceMode = 'relevant';
 }

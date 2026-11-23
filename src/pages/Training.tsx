@@ -5,8 +5,9 @@ import { AIControls } from '../AIControls';
 import { JobCard } from '../JobCard';
 import { Markdown } from '../Markdown';
 import { TrainingText } from '../TrainingText';
+import { TrainingFeedbackList } from '../TrainingFeedbackList';
 import { importChapters, now, taskNames, type Job, type Skill, type TrainingAnnotation } from '../domain';
-import { adoptTrainingSkill, scenarioTraining, skillText, trainingCandidate, trainingOriginal, trainingReview } from '../training';
+import { adoptTrainingSkill, hasTrainingFeedback, scenarioTraining, skillText, trainingCandidate, trainingOriginal, trainingReview } from '../training';
 import { ChevronRight, Sparkles } from '../icons';
 import type { Store } from '../useWorkspace';
 
@@ -79,7 +80,7 @@ function TrainingResult({ job, store, focused }: { job: Job; store: Store; focus
     try { store.update(s => adoptTrainingSkill(s, job)); store.notify('已采用最佳 Skill'); }
     catch (error) { store.notify(error instanceof Error ? error.message : String(error)); }
   };
-  const completeScores = scores.length === training.cases.length && scores.every(score => typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 10);
+  const canSubmit = scores.length === training.cases.length && hasTrainingFeedback(review);
   return <Paper className="surface"><Stack gap="lg"><Group justify="space-between"><Stack gap={4}><Title order={3}>{job.sourceTitle}</Title><Text size="sm" c="dimmed">{training.mode === 'scenario' ? '其他场景训练' : training.chapterTitle ?? '原文章节训练'}</Text></Stack>{training.bestScore >= 0 && <Text fw={600}>最佳 {training.bestScore.toFixed(1)} / 10</Text>}</Group>
     {rounds.length > 0 && <>
       <Group justify="space-between"><Select label="轮次" value={String(round)} onChange={setViewRound} options={rounds.map(r => ({ value: String(r), label: `第 ${r} 轮` }))} /><Text size="sm" c="dimmed">原文基准：10 分</Text></Group>
@@ -91,16 +92,17 @@ function TrainingResult({ job, store, focused }: { job: Job; store: Store; focus
         </SimpleGrid>
       </Stack>)}
     </>}
-    {evaluation && <Stack gap="sm"><Text fw={500}>{evaluation.source === 'human' ? '用户评分' : '历史评分'} · {evaluation.scores.join('、')} / 10</Text>{evaluation.feedback && <Text size="sm">{evaluation.feedback}</Text>}</Stack>}
-    {showReview && <Stack gap="md"><Title order={3}>用户评分</Title><SimpleGrid cols={{ base: 1, sm: 2 }}>{training.cases.map((c, i) => <NumberInput key={i} disabled={!canScore} label={training.cases.length === 1 ? '生成稿评分' : `${c.title}评分`} placeholder="0–10" min={0} max={10} clampBehavior="strict" step={0.5} value={scores[i] ?? ''} onChange={v => editReview(draft => { draft.scores[i] = v === '' ? '' : Number(v); })} />)}</SimpleGrid>
+    {evaluation && <Stack gap="sm"><Title order={3}>{evaluation.source === 'human' ? '已提交反馈' : '历史反馈'}</Title>{evaluation.scores.some(score => typeof score === 'number') && <Text size="sm">用户评分 · {evaluation.scores.map(score => score === '' ? '未评分' : `${score} / 10`).join('、')}</Text>}{evaluation.feedback && <Stack gap="xs"><Text size="sm" fw={500}>整体反馈</Text><Text size="sm" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{evaluation.feedback}</Text></Stack>}<TrainingFeedbackList key={round} annotations={evaluation.annotations ?? []} cases={training.cases} /></Stack>}
+    {showReview && <Stack gap="md"><Title order={3}>用户反馈</Title><SimpleGrid cols={{ base: 1, sm: 2 }}>{training.cases.map((c, i) => <NumberInput key={i} disabled={!canScore} label={training.cases.length === 1 ? '生成稿评分（选填）' : `${c.title}评分（选填）`} placeholder="0–10" min={0} max={10} clampBehavior="strict" step={0.5} value={scores[i] ?? ''} onChange={v => editReview(draft => { draft.scores[i] = v === '' ? '' : Number(v); })} />)}</SimpleGrid>
       <Stack gap="xs"><Group justify="space-between"><Text component="label" htmlFor={`training-feedback-${job.id}`} size="sm">整体反馈</Text>{generatingFeedback ? <Group gap="sm"><Loader size="xs" aria-label="正在生成反馈" /><Button onClick={() => store.stop(job.id)}>停止生成反馈</Button></Group> : <Button icon={Sparkles} disabled={!store.state.aiSelection.model} onClick={() => store.generateTrainingFeedback(job.id)}>AI 生成反馈</Button>}</Group>
         <Textarea id={`training-feedback-${job.id}`} disabled={!canScore} placeholder="需要改进的内容" maxLength={8000} autosize minRows={3} value={feedback} onChange={e => { const value = e.target.value; editReview(draft => { draft.feedback = value; }); }} />
       </Stack>
+      <TrainingFeedbackList annotations={annotations} cases={training.cases} canEdit={canScore} onEdit={(index, value) => editReview(draft => { draft.annotations[index].feedback = value; })} onDelete={index => editReview(draft => { draft.annotations.splice(index, 1); })} />
       {job.error && <Text size="sm" c="red.8" role="alert">{job.error}</Text>}
-      <Group><Button primary disabled={!canScore || !completeScores} onClick={() => store.scoreTraining(job.id, scores as number[], feedback, annotations, false)}>继续训练</Button><Button disabled={!canScore || !completeScores} onClick={() => store.scoreTraining(job.id, scores as number[], feedback, annotations, true)}>结束训练</Button></Group>
+      <Group><Button primary disabled={!canScore || !canSubmit} onClick={() => store.scoreTraining(job.id, scores, feedback, annotations, false)}>继续训练</Button><Button disabled={!canScore || !canSubmit} onClick={() => store.scoreTraining(job.id, scores, feedback, annotations, true)}>结束训练</Button></Group>
     </Stack>}
     {job.status === 'accepted' && <Group><Button primary onClick={() => store.continueTraining(job.id)}>继续训练</Button>{!training.approvedAt && training.mode !== 'scenario' && <Button onClick={() => store.update(s => { const t = s.jobs.find(j => j.id === job.id)!.training!; t.approvedAt = now(); const e = t.evaluations[t.evaluations.length - 1]; e.satisfied = true; e.decision = 'keep'; })}>结束训练</Button>}</Group>}
-    {training.bestSkill && training.bestScore >= 0 && <Accordion variant="separated"><Accordion.Item value="best"><Accordion.Control>最佳 Skill</Accordion.Control><Accordion.Panel><Stack><Markdown onError={store.notify}>{training.bestSkill}</Markdown><Group><Button onClick={adopt}>采用此版本</Button></Group></Stack></Accordion.Panel></Accordion.Item></Accordion>}
+    {training.bestSkill && (training.bestScore >= 0 || training.approvedAt) && <Accordion variant="separated"><Accordion.Item value="best"><Accordion.Control>{training.bestScore >= 0 ? '最佳 Skill' : '已确认 Skill'}</Accordion.Control><Accordion.Panel><Stack><Markdown onError={store.notify}>{training.bestSkill}</Markdown><Group><Button onClick={adopt}>采用此版本</Button></Group></Stack></Accordion.Panel></Accordion.Item></Accordion>}
     {job.status === 'accepted' && training.mode !== 'scenario' && training.approvedAt && <Group><Button onClick={startScenarios}>开始其他场景训练</Button></Group>}
     <Accordion variant="separated" defaultValue={focused || ['failed', 'paused'].includes(job.status) ? 'process' : undefined}><Accordion.Item value="process"><Accordion.Control>训练过程</Accordion.Control><Accordion.Panel><JobCard focused={focused} job={job} store={store} /></Accordion.Panel></Accordion.Item></Accordion>
   </Stack></Paper>;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type Skill, type TaskKind, type TrainingAnnotation, type Workspace } from './domain';
+import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type Skill, type TaskKind, type TrainingAnnotation, type TrainingScore, type Workspace } from './domain';
 import { normalizeImageSelection } from './coverData';
 import { hasActiveRequests, loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
@@ -352,7 +352,7 @@ export function useWorkspace() {
     job.sourceTitle = title; job.status = 'queued';
     update(s => s.jobs.unshift(job)); notify('任务已添加'); return job.id;
   }, [notify, update]);
-  const scoreTraining = useCallback((id: string, scores: number[], feedback: string, annotations: TrainingAnnotation[] = [], satisfied = false) => {
+  const scoreTraining = useCallback((id: string, scores: TrainingScore[], feedback: string, annotations: TrainingAnnotation[] = [], satisfied = false) => {
     try {
       update(s => {
         const job = s.jobs.find(j => j.id === id);
@@ -362,7 +362,7 @@ export function useWorkspace() {
         if (!satisfied) job.ai = resolveAI(s.aiSelection, s.providers);
         recordEvaluation(job, part, { scores, feedback, annotations, satisfied, decision: 'auto' }); job.status = 'queued';
       });
-      notify('评分已保存');
+      notify('反馈已保存');
       return true;
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); return false; }
   }, [notify, update]);
