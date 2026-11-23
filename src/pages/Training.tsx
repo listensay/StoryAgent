@@ -1,42 +1,56 @@
 import { useEffect, useState } from 'react';
-import { Accordion, Group, Loader, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Accordion, Badge, Group, Loader, NavLink, SimpleGrid, Stack, Text } from '@mantine/core';
 import { Button, EmptyState, NumberInput, Paper, Select, Textarea, Title } from '../components';
 import { AIControls } from '../AIControls';
 import { JobCard } from '../JobCard';
 import { Markdown } from '../Markdown';
 import { TrainingText } from '../TrainingText';
-import { importChapters, now, type Job, type TrainingAnnotation } from '../domain';
+import { importChapters, now, taskNames, type Job, type Skill, type TrainingAnnotation } from '../domain';
 import { adoptTrainingSkill, scenarioTraining, skillText, trainingCandidate, trainingOriginal, trainingReview } from '../training';
-import { Sparkles } from '../icons';
+import { ChevronRight, Sparkles } from '../icons';
 import type { Store } from '../useWorkspace';
 
 export function Training({ store, onSettings, focusJobId }: { store: Store; onSettings: () => void; focusJobId?: string }) {
   const skills = store.state.skills.filter(s => !s.builtin);
-  const [skillId, setSkillId] = useState(store.state.jobs.find(j => j.id === focusJobId)?.training?.skillId ?? skills[0]?.id ?? '');
+  const focusSkillId = store.state.jobs.find(j => j.id === focusJobId)?.training?.skillId;
+  const [skillId, setSkillId] = useState(focusSkillId ?? '');
   const skill = skills.find(s => s.id === skillId);
+  useEffect(() => { setSkillId(focusSkillId ?? ''); }, [focusJobId, focusSkillId]);
+  return <div className="page"><Stack gap="lg" style={{ flex: 1 }}><Title order={2}>Skill 训练营</Title>{skill ? <>
+    <Group justify="space-between"><Title order={3}>{skill.name}</Title><Button onClick={() => setSkillId('')}>返回 Skill 列表</Button></Group>
+    <SkillTraining key={skill.id} skill={skill} store={store} onSettings={onSettings} focusJobId={focusJobId} />
+  </> : !skills.length ? <EmptyState>暂无可训练的 Skill</EmptyState> : <Paper p={0} style={{ overflow: 'hidden' }}><Stack gap={0}>
+    {skills.map(item => <NavLink key={item.id} component="button" aria-label={`训练 ${item.name}`} onClick={() => setSkillId(item.id)} px="lg" py="md" rightSection={<ChevronRight size={20} />}
+      label={<Text size="md" fw={600} style={{ overflowWrap: 'anywhere' }}>{item.name}</Text>}
+      description={<Stack gap="sm" mt={4}><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{item.description}</Text><Group gap="sm"><Text size="xs" c="dimmed">{item.originReferenceId ? '小说提炼' : item.source.startsWith('https://github.com/') ? 'GitHub' : '文件导入'} · {item.version}</Text>{item.tasks.map(task => <Badge key={task}>{taskNames[task]}</Badge>)}</Group></Stack>} />)}
+  </Stack></Paper>}</Stack></div>;
+}
+function SkillTraining({ skill, store, onSettings, focusJobId }: { skill: Skill; store: Store; onSettings: () => void; focusJobId?: string }) {
+  const [mode, setMode] = useState('');
   const [sourceId, setSourceId] = useState(''), [chapterIndex, setChapterIndex] = useState('0');
   const [target, setTarget] = useState(8.5);
   const reference = store.state.references.find(r => r.id === (sourceId || skill?.originReferenceId));
   const chapters = reference ? importChapters(reference.content) : [];
   const chapter = chapters[Number(chapterIndex)], original = chapter?.content ?? '';
-  useEffect(() => { const job = store.state.jobs.find(j => j.id === focusJobId); if (job?.training) setSkillId(job.training.skillId); }, [focusJobId]);
-  const jobs = store.state.jobs.filter(j => j.training?.skillId === skillId);
+  const jobs = store.state.jobs.filter(j => j.training?.skillId === skill.id);
   const run = () => {
     try {
-      if (!skill || !original.trim()) throw new Error('请选择 Skill 和原文章节');
-      store.launch({ kind: 'train', sourceId: reference?.id, sourceTitle: skill.name, training: { skillId, initialSkill: skillText(skill), bestSkill: '', bestScore: -1, targetScore: target, judge: 'human', mode: 'chapter', chapterTitle: chapter.title, original, cases: [], evaluations: [] } });
+      if (mode !== 'chapter' || !original.trim()) throw new Error('请选择训练方式和原文章节');
+      store.launch({ kind: 'train', sourceId: reference?.id, sourceTitle: skill.name, training: { skillId: skill.id, initialSkill: skillText(skill), bestSkill: '', bestScore: -1, targetScore: target, judge: 'human', mode: 'chapter', chapterTitle: chapter.title, original, cases: [], evaluations: [] } });
     } catch (error) { store.notify(error instanceof Error ? error.message : String(error)); }
   };
-  return <div className="page"><Stack gap="lg"><Title order={2}>Skill 训练营</Title>{!skills.length ? <EmptyState>暂无可训练的 Skill</EmptyState> : <>
-    <Paper className="surface"><Stack gap="lg"><Title order={3}>原文章节训练</Title><Select label="Skill" value={skillId} onChange={id => { setSkillId(id); setSourceId(''); setChapterIndex('0'); }} options={skills.map(s => ({ value: s.id, label: s.name }))} />
-      {skill && <Accordion variant="separated"><Accordion.Item value="skill"><Accordion.Control>Skill 内容</Accordion.Control><Accordion.Panel><Markdown onError={store.notify}>{skillText(skill)}</Markdown></Accordion.Panel></Accordion.Item></Accordion>}
+  return <>
+    <Paper className="surface"><Stack gap="lg"><Select label="训练方式" placeholder="选择训练方式" value={mode} onChange={setMode} options={[{ value: 'chapter', label: '原文章节训练' }]} />
+      <Accordion variant="separated"><Accordion.Item value="skill"><Accordion.Control>Skill 内容</Accordion.Control><Accordion.Panel><Markdown onError={store.notify}>{skillText(skill)}</Markdown></Accordion.Panel></Accordion.Item></Accordion>
+      {mode === 'chapter' && <>
       <SimpleGrid cols={{ base: 1, md: 2 }}><Select label="原文" value={reference?.id ?? ''} onChange={id => { setSourceId(id); setChapterIndex('0'); }} options={store.state.references.filter(r => r.kind === 'text' && r.content.trim()).map(r => ({ value: r.id, label: r.title }))} /><Select label="原文章节" value={chapterIndex} onChange={setChapterIndex} options={chapters.map((c, i) => ({ value: String(i), label: c.title }))} /></SimpleGrid>
       <NumberInput label="目标分数" min={1} max={10} step={0.5} value={target} onChange={v => setTarget(Number(v))} />
       <AIControls providers={store.state.providers} value={store.state.aiSelection} onChange={store.setAISelection} onSettings={onSettings} columns={2} />
-      <Group><Button primary disabled={!skill || !original.trim() || !store.state.aiSelection.model} onClick={run}>开始章节训练</Button></Group>
+      <Group><Button primary disabled={!original.trim() || !store.state.aiSelection.model} onClick={run}>开始章节训练</Button></Group>
+      </>}
     </Stack></Paper>
     {jobs.map(job => <TrainingResult focused={job.id === focusJobId} key={job.id} job={job} store={store} />)}
-  </>}</Stack></div>;
+  </>;
 }
 function TrainingResult({ job, store, focused }: { job: Job; store: Store; focused: boolean }) {
   const training = job.training!;
