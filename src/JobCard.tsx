@@ -5,7 +5,7 @@ import { type Store } from './useWorkspace';
 import { Paper, UnstyledButton, Title, Button, Diff, EmptyState, IconButton, ModalPresence, Modal, Badge, type ModalVisibilityProps } from './components';
 import { AIControls } from './AIControls';
 import { Markdown } from './Markdown';
-import { Box, Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Accordion, Box, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useAIScroll } from './useAIScroll';
 import { canAcceptWritingStep, parseMemory, parsePreparation, writingComparison } from './jobWorkflow';
 import { composedSkillText, parseSkillComposition } from './skillExtraction';
@@ -44,12 +44,15 @@ export function JobCard({ job, store, compact = false, focused = false }: { job:
     return <JobResult output={output} generating={step.status === 'running'} preparation={job.kind === 'prepare' && !step.intermediate} memory={step.stage === 'memory'} sourceText={sourceText} onError={store.notify} onCitation={showCitation} />;
   };
   const canAccept = (step: JobStep) => canAcceptWritingStep(job, step);
+  const stepContent = (step: JobStep) => <>{step.output || step.stage === 'style-research' ? result(step) : <EmptyState minHeight={88}>{job.collectionTask || job.articleTask ? job.status === 'running' ? '正在采集…' : '等待采集' : step.status === 'running' ? '正在生成…' : '等待生成'}</EmptyState>}
+    {step.output && (step.stage !== 'style-research' || step.research) && !(step.stage === 'style-compose' && step.status === 'running') && <div className="row actions"><IconButton icon={Copy} label="复制结果" onClick={() => void copy(step)} />{['draft', 'continue', 'rewrite', 'plan'].includes(job.kind) && (!step.intermediate || step.stage === 'plan') && <Button icon={GitCompare} onClick={() => setCompare(step.id)}>对比</Button>}{canAccept(step) && <Button primary icon={Check} onClick={() => store.accept(job.id, step.id)}>{['review', 'scan', 'analyze'].includes(job.kind) ? '保存参考' : job.kind === 'style' ? '保存 Skill' : '采用'}</Button>}</div>}
+  </>;
   return <Paper ref={contentRef} id={`job-${job.id}`} component="article" p="md"  className={`job-card ${compact ? 'compact' : ''}`}>
     <div className="job-heading"><UnstyledButton className="job-title" onClick={() => setOpen(!open)} aria-expanded={open}><span>{taskNames[job.kind]}</span>{open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</UnstyledButton><Badge color={job.status === 'running' ? 'story' : 'gray'}>{statuses[job.status]}</Badge></div>
     {open && <><div className="job-meta">{job.collectionTask || job.articleTask ? '正文采集' : job.ai ? `${store.state.providers.find(p => p.id === job.ai?.providerId)?.name ?? '供应商已移除'} · ${job.ai.model}` : 'AI 未设置'} · {new Date(job.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
-      {job.steps.map(step => <section className="job-step" key={step.id}><div className="row between"><Title order={4}>{step.title}</Title>{step.status === 'accepted' && <Check size={16} />}</div>{step.output || step.stage === 'style-research' ? result(step) : <EmptyState minHeight={88}>{job.collectionTask || job.articleTask ? job.status === 'running' ? '正在采集…' : '等待采集' : step.status === 'running' ? '正在生成…' : '等待生成'}</EmptyState>}
-        {step.output && (step.stage !== 'style-research' || step.research) && !(step.stage === 'style-compose' && step.status === 'running') && <div className="row actions"><IconButton icon={Copy} label="复制结果" onClick={() => void copy(step)} />{['draft', 'continue', 'rewrite', 'plan'].includes(job.kind) && (!step.intermediate || step.stage === 'plan') && <Button icon={GitCompare} onClick={() => setCompare(step.id)}>对比</Button>}{canAccept(step) && <Button primary icon={Check} onClick={() => store.accept(job.id, step.id)}>{['review', 'scan', 'analyze'].includes(job.kind) ? '保存参考' : job.kind === 'style' ? '保存 Skill' : '采用'}</Button>}</div>}
-      </section>)}
+      {job.training ? <Accordion multiple variant="separated" order={4} mt="md" chevron={<ChevronDown size={16} />}>
+        {job.steps.map(step => <Accordion.Item key={step.id} value={step.id}><Accordion.Control><Text component="span" size="sm" fw={600}>{step.title}</Text></Accordion.Control><Accordion.Panel><Stack gap="sm" className="job-step-content">{stepContent(step)}</Stack></Accordion.Panel></Accordion.Item>)}
+      </Accordion> : job.steps.map(step => <section className="job-step" key={step.id}><div className="row between"><Title order={4}>{step.title}</Title>{step.status === 'accepted' && <Check size={16} />}</div>{stepContent(step)}</section>)}
       {job.error && <p className="error" role="alert">{job.error}</p>}
       <div className="row actions job-controls">{['running', 'queued'].includes(job.status) ? <Button icon={Pause} onClick={() => store.stop(job.id)}>停止</Button> : <>{['paused', 'failed'].includes(job.status) && <>{job.ai && <Button icon={Settings2} onClick={() => setAIOpen(true)}>AI 设置</Button>}<Button icon={Play} onClick={() => store.resumeJob(job.id)}>继续</Button><Button icon={RefreshCw} onClick={() => store.resumeJob(job.id, true)}>重新生成</Button></>}{job.kind === 'style' && ['ready', 'accepted'].includes(job.status) && <Button icon={RefreshCw} onClick={() => store.reextractSkill(job.id)}>重新提取</Button>}<IconButton icon={Trash2} label="删除任务" onClick={() => store.update(s => { s.jobs = s.jobs.filter(j => j.id !== job.id); })} /></>}</div>
     </>}

@@ -88,7 +88,7 @@ small { font-size: 12px; line-height: 1.67; }
 .job-meta { font-size: 12px; color: var(--story-muted); margin: 7px 0 14px; }
 .job-step { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--mantine-color-gray-2); }
 .job-step .mantine-Title-root { margin-bottom: 8px; }
-.job-step .result { max-height: 450px; overflow: auto; }
+.job-step .result, .job-step-content .result { max-height: 450px; overflow: auto; }
 .compact .result { max-height: 300px; }
 .job-card .actions { flex-wrap: wrap; margin-top: 12px; }
 .job-controls { border-top: 1px solid var(--mantine-color-gray-2); padding-top: 12px; }
