@@ -9,6 +9,28 @@ import { fitSkillResources, relevantSkillResources, skillApplicationRules } from
 export const skillText = (skill: Skill) => (skill.resourceMode === 'relevant' ? skill.files.filter(f => /(^|\/)SKILL\.md$/i.test(f.path)) : skill.files.filter(f => /\.(md|txt)$/i.test(f.path))).map(f => f.content).join('\n\n');
 export const trainingOriginal = (training: NonNullable<Job['training']>) => training.original ?? training.cases[0]?.original ?? '';
 export const trainingCandidate = (job: Job, round: number, caseIndex: number) => job.steps.find(s => s.stage === 'train-write' && s.round === round && s.caseIndex === caseIndex)?.output ?? '';
+export function trainingReview(job: Job, round: number) {
+  const training = job.training!;
+  if (training.review?.round !== round) training.review = { round, scores: training.cases.map(() => ''), feedback: '', annotations: [] };
+  return training.review;
+}
+export function startTrainingFeedback(job: Job) {
+  const judge = job.steps.find(part => part.stage === 'train-judge' && part.status === 'pending');
+  if (!job.training || job.status !== 'waiting' || !judge?.round) throw new Error('请先等待本轮生成完成');
+  const writers = job.steps.filter(part => part.stage === 'train-write' && part.round === judge.round);
+  if (writers.length !== job.training.cases.length || writers.some(part => part.status !== 'accepted' || !part.output.trim())) throw new Error('请先等待本轮生成完成');
+  if (trainingReview(job, judge.round).feedback.trim().length >= 7998) throw new Error('整体反馈已达到长度上限，请精简后重试');
+  job.steps.splice(job.steps.indexOf(judge), 0, step(job, 'train-feedback', judge.round, `第 ${judge.round} 轮 · AI 生成反馈`));
+  job.status = 'queued'; job.error = '';
+}
+// Optional feedback failures return to manual review without losing the draft.
+export function discardTrainingFeedback(job: Job) {
+  const part = job.steps.find(part => part.stage === 'train-feedback' && part.status !== 'accepted');
+  if (!part || !job.steps.some(judge => judge.stage === 'train-judge' && judge.round === part.round && judge.status === 'pending')) return false;
+  job.steps = job.steps.filter(step => step !== part);
+  job.status = 'waiting';
+  return true;
+}
 const briefSchema = z.string().trim().min(1).max(8000);
 const scenariosSchema = z.object({ transfers: z.array(briefSchema).length(3) });
 export function validateTraining(training: NonNullable<Job['training']>) {
@@ -134,6 +156,15 @@ export function trainingPrompt(job: Job, part: JobStep, selectedResources?: Skil
     return withResources(`使用以下 Skill 按创作提示词生成${training.mode === 'scenario' ? '场景文章' : '本章正文'}。创作提示词决定人物、事件和设定，准确沿用其中的能力程度、时间、金额、数量与规则；Skill 只指导表达，不能改写这些条件。按提示词指定的顺序揭示信息与转折，区分人物对外说辞与真实处境。用动作、对白和必要环境承接事件，不补造提示词未确定的人物经历、能力、规则或数值。${length}只输出正文，不解释规则。\n<skill>\n${rules}\n</skill>\n${skillApplicationRules}\n创作提示词：\n${scenario.brief}`, scenario.brief, 'draft');
   }
   if (part.stage === 'train-judge') throw new Error('训练仅支持用户评分');
+  if (part.stage === 'train-feedback') {
+    const review = training.review?.round === round ? training.review : undefined;
+    const limit = Math.min(4000, 8000 - (review?.feedback.trim().length ?? 0) - (review?.feedback.trim() ? 2 : 0));
+    if (limit <= 0) throw new Error('整体反馈已达到长度上限，请精简后重试');
+    const comparison = training.mode === 'scenario'
+      ? '这是其他场景训练。分别检查各场景是否遵守自己的创作提示词，只与参考原文比较叙述口吻、对白、动作细节、节奏、情绪与信息揭示等写法及阅读效果；不能把题材、人物、事件和设定不同判为问题，不要求复现原文情节。'
+      : '这是原文章节训练。逐项核对人物目标、事实设定、能力程度、时间、金额、数量、事件顺序、因果、知情范围与关键转折，找出遗漏、偏差及无依据的新增信息；再比较叙述口吻、对白、动作细节、节奏、幽默或其他情绪节拍和信息揭示的效果。';
+    return { system, user: `对照参考原文与本轮全部生成稿，为用户的整体反馈补充具体问题。${comparison}原文是质量基准，评分由用户决定，不输出分数，不改写正文或 Skill，不决定继续或结束训练。只提出材料中有证据的问题，区分事实偏差与表达建议；引用必须是相应文本中的准确短句，指出所在场景、问题造成的影响及可执行的调整方向。不以个人偏好推断问题，不要求逐句模仿原文。结合已有整体反馈与划词评价，避免重复已有意见；没有其他明确问题时简短说明。只输出可直接放入整体反馈框的纯文本，最多 6 项，不加开场、标题、JSON 或代码围栏，不超过 ${limit} 字符。\n参考原文：\n${trainingOriginal(training)}\n本轮生成稿与创作提示词：\n${JSON.stringify(training.cases.map((scenario, index) => ({ title: scenario.title, brief: scenario.brief, candidate: trainingCandidate(job, round, index) })))}\n用户已有评分、整体反馈与划词评价：\n${JSON.stringify({ scores: review?.scores ?? [], feedback: review?.feedback ?? '', annotations: review?.annotations ?? [] })}` };
+  }
   if (part.stage !== 'train-revise') throw new Error('未知训练步骤');
   const evaluation = training.evaluations.find(e => e.round === round);
   const action = evaluation?.decision === 'reextract' ? '重新从原文提炼' : '根据用户评分和反馈，自行判断局部修订还是重新提炼，并优化';
@@ -173,6 +204,16 @@ export function continueTraining(job: Job) {
 export function finishTrainingStep(job: Job, part: JobStep) {
   if (part.stage === 'train-judge') throw new Error('训练仅支持用户评分');
   if (part.status === 'accepted') return;
+  if (part.stage === 'train-feedback') {
+    if (!job.steps.includes(part) || !job.steps.some(judge => judge.stage === 'train-judge' && judge.round === part.round && judge.status === 'pending')) throw new Error('本轮已结束');
+    const output = part.output.trim();
+    if (!output) throw new Error('生成反馈为空');
+    const review = trainingReview(job, part.round!);
+    const feedback = [review.feedback.trim(), output].filter(Boolean).join('\n\n');
+    if (feedback.length > 8000) throw new Error('生成反馈超过长度上限，请精简整体反馈后重试');
+    review.feedback = feedback;
+    part.output = output;
+  }
   if (part.stage === 'train-brief' || part.stage === 'train-scenarios') {
     const parsed = (part.stage === 'train-brief' ? z.object({ brief: briefSchema }) : scenariosSchema).safeParse(parseJSON(part.output));
     if (!parsed.success) throw new Error('创作提示词格式无效，请重新生成');

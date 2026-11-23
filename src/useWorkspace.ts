@@ -10,7 +10,7 @@ import { selectSkillResources } from './skillResources';
 import { publishJobOutput } from './jobOutput';
 import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep, writingTarget } from './jobWorkflow';
-import { applyBestSkill, continueTraining as continueTrainingJob, finishTrainingStep, generateTrainingRevision, initializeTraining, recordEvaluation, scenarioTraining, skillText, trainingPrompt, trainingResourceSelection, validateTraining } from './training';
+import { applyBestSkill, continueTraining as continueTrainingJob, discardTrainingFeedback, finishTrainingStep, generateTrainingRevision, initializeTraining, recordEvaluation, scenarioTraining, skillText, startTrainingFeedback, trainingPrompt, trainingResourceSelection, validateTraining } from './training';
 import { runnableJobs } from './taskQueue';
 import { AIRequestQueue, runJobSteps } from './stepQueue';
 import { runArticleCollection, runCollection } from './collectionTask';
@@ -179,7 +179,7 @@ export function useWorkspace() {
       commit(s => { const job = s.jobs.find(j => j.id === id); if (job) { if (job.training) applyBestSkill(s, job); job.status = job.steps.filter(p => !p.intermediate).every(p => p.status === 'accepted') ? 'accepted' : 'ready'; } });
     } catch (error) {
       const paused = controller.signal.aborted;
-      commit(s => { const job = s.jobs.find(j => j.id === id); if (job) { job.status = paused ? 'paused' : 'failed'; job.error = paused ? '' : error instanceof Error ? error.message : String(error); job.steps.forEach(step => { if (step.status === 'running') step.status = 'pending'; }); } });
+      commit(s => { const job = s.jobs.find(j => j.id === id); if (job) { if (!discardTrainingFeedback(job)) job.status = paused ? 'paused' : 'failed'; job.error = paused ? '' : error instanceof Error ? error.message : String(error); job.steps.forEach(step => { if (step.status === 'running') step.status = 'pending'; }); } });
     } finally { if (controllers.current.get(id) === controller) controllers.current.delete(id); setQueueTick(t => t + 1); }
   }, [update, requests]);
   const launch = useCallback((options: Launch): string => {
@@ -366,6 +366,20 @@ export function useWorkspace() {
       return true;
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); return false; }
   }, [notify, update]);
+  const generateTrainingFeedback = useCallback((id: string) => {
+    try {
+      if (restarting.current) throw new Error('正在更新软件');
+      update(s => {
+        const job = s.jobs.find(job => job.id === id);
+        if (!job?.training) throw new Error('训练任务不存在');
+        const config = resolveAI(s.aiSelection, s.providers);
+        startTrainingFeedback(job); job.ai = config;
+        const part = job.steps.find(part => part.stage === 'train-feedback' && part.status === 'pending')!;
+        const prompt = trainingPrompt(job, part);
+        if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('对比材料超过上下文上限，请增大 AI 上下文');
+      });
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  }, [notify, update]);
   const resumeJob = useCallback((id: string, restart = false) => {
     if (controllers.current.has(id)) return;
     try {
@@ -417,7 +431,7 @@ export function useWorkspace() {
   const stop = useCallback((id: string) => {
     const active = controllers.current.get(id);
     if (active) active.abort();
-    else update(s => { const job = s.jobs.find(j => j.id === id); if (job && job.status === 'queued') job.status = 'paused'; });
+    else update(s => { const job = s.jobs.find(j => j.id === id); if (job && job.status === 'queued' && !discardTrainingFeedback(job)) job.status = 'paused'; });
   }, [update]);
   const accept = useCallback((jobId: string, stepId: string) => {
     try {
@@ -480,7 +494,7 @@ export function useWorkspace() {
     return true;
   }, [canUpdate]);
   const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };
