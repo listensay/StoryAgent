@@ -2,7 +2,7 @@ import { MantineProvider } from '@mantine/core';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { createJob, emptyWorkspace, type TrainingAnnotation } from './domain';
-import { initializeTraining, recordEvaluation, trainingReview } from './training';
+import { finishTrainingStep, initializeTraining, recordEvaluation, trainingReview } from './training';
 import { Training } from './pages/Training';
 import { parseSkills } from './skills';
 import type { Store } from './useWorkspace';
@@ -46,5 +46,16 @@ describe('训练反馈提交与可见内容', () => {
     const html = render();
     for (const text of ['已提交反馈', '第一行反馈\n第二行反馈', annotation.quote, annotation.feedback, '已确认 Skill']) expect(html).toContain(text);
     expect(html).not.toContain('编辑评价 1'); expect(html).not.toContain('删除评价 1'); expect(html).not.toContain('-1.0');
+  });
+  it('各轮提供 Skill 查看入口，未评分的修订轮次也能查看改动', () => {
+    const { job, render } = setup();
+    expect(action(render(), '查看本轮 Skill')).toBeDefined();
+    recordEvaluation(job, job.steps[1], { scores: [''], feedback: '保留犹豫的动作。', annotations: [], decision: 'auto', satisfied: false });
+    const revision = job.steps[job.steps.length - 1]; revision.output = job.training!.initialSkill + '\n掩饰意图时用动作呈现迟疑。'; finishTrainingStep(job, revision);
+    job.steps.find(part => part.stage === 'train-write' && part.round === 2)!.status = 'accepted'; job.status = 'waiting';
+    const html = render();
+    expect(action(html, '查看 Skill 改动')).toBeDefined();
+    expect(html).toContain('文本问题与 Skill 调整建议');
+    expect(job.training!.bestScore).toBe(-1);
   });
 });
