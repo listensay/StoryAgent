@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { releaseRecord } from '../src/changelog.mjs';
 
 export const versionFiles = ['package.json', 'package-lock.json', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'src-tauri/tauri.conf.json'];
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -94,6 +95,8 @@ export async function release({ args = [], run = execute, read = readFile, write
   }
   const tags = (await run('git', ['tag', '--list', 'v*'], { capture: true })).split('\n');
   const version = nextVersion(JSON.parse(sources['package.json']).version, tags, requested[0]);
+  const changelog = await read('CHANGELOG.md', 'utf8');
+  releaseRecord(changelog, version);
   const files = updateVersions(sources, version), tag = `v${version}`;
   log(`${dryRun ? 'Plan' : 'Release'}: ${tag}; synchronize ${versionFiles.join(', ')}; test; commit; push main + tag; wait for GitHub Release.`);
   if (dryRun) { log('Dry run uses local tags. Publishing requires GitHub CLI authentication, the signing secret and a clean main branch.'); return { version, dryRun }; }
@@ -102,6 +105,7 @@ export async function release({ args = [], run = execute, read = readFile, write
   await run('npm', ['run', 'ui:build']);
   await run('cargo', ['test', '--locked', '--manifest-path', 'src-tauri/Cargo.toml']);
   await run('git', ['diff', '--check']);
+  if (await read('CHANGELOG.md', 'utf8') !== changelog) throw new Error('CHANGELOG.md changed during validation. Review it before releasing.');
   const changes = await run('git', ['status', '--porcelain'], { capture: true });
   if (changes.split('\n').filter(Boolean).some(line => !versionFiles.includes(line.slice(3)))) throw new Error('The working tree changed during validation. Review the changes before releasing.');
   for (const file of versionFiles) if (await read(file, 'utf8') !== files[file]) throw new Error(`${file} changed during validation. Review it before releasing.`);

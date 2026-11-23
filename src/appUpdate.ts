@@ -2,10 +2,11 @@ import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { type DownloadEvent, Update } from '@tauri-apps/plugin-updater';
+import { validateChangelog, type ChangelogEntry } from './changelog.mjs';
 
 export type UpdateStatus = 'idle' | 'checking' | 'current' | 'unpublished' | 'available' | 'downloading' | 'ready' | 'waiting' | 'installing' | 'restarting' | 'error';
-export type UpdateState = { status: UpdateStatus; currentVersion: string; version: string; downloaded: number; total?: number; error: string };
-export type UpdateHandle = Pick<Update, 'version' | 'download' | 'install' | 'close'>;
+export type UpdateState = { status: UpdateStatus; currentVersion: string; version: string; downloaded: number; total?: number; error: string; notes: string; releases: ChangelogEntry[] };
+export type UpdateHandle = Pick<Update, 'version' | 'download' | 'install' | 'close'> & Partial<Pick<Update, 'body' | 'rawJson'>>;
 export type UpdateDependencies = {
   getVersion: () => Promise<string>;
   check: () => Promise<UpdateHandle | null | 'unpublished'>;
@@ -21,7 +22,7 @@ export function updatePercent(state: Pick<UpdateState, 'downloaded' | 'total'>):
 }
 
 export class AppUpdateController {
-  private state: UpdateState = { status: 'idle', currentVersion: '', version: '', downloaded: 0, error: '' };
+  private state: UpdateState = { status: 'idle', currentVersion: '', version: '', downloaded: 0, error: '', notes: '', releases: [] };
   private listeners = new Set<() => void>();
   private update?: UpdateHandle;
   private downloaded = false;
@@ -63,7 +64,9 @@ export class AppUpdateController {
       const update = await this.dependencies.check();
       if (epoch !== this.epoch) { if (update !== 'unpublished') await update?.close(); return; }
       this.update = update === 'unpublished' ? undefined : update ?? undefined;
-      this.publish({ status: update === 'unpublished' ? 'unpublished' : update ? 'available' : 'current', currentVersion, version: this.update?.version ?? '' });
+      let releases: ChangelogEntry[] = [];
+      try { if (this.update?.rawJson?.changelog) releases = validateChangelog(this.update.rawJson.changelog); } catch { /* Older or malformed manifests can still supply release notes. */ }
+      this.publish({ status: update === 'unpublished' ? 'unpublished' : update ? 'available' : 'current', currentVersion, version: this.update?.version ?? '', notes: this.update?.body ?? '', releases });
     } catch (error) {
       if (epoch === this.epoch) this.publish({ status: 'error', error: updateCheckError(error) });
     } finally { if (epoch === this.epoch) this.busy = false; }

@@ -31,6 +31,24 @@ describe('desktop updates', () => {
     expect(dependencies.check).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps release notes and history during update checks without downloading', async () => {
+    const { controller, update } = fixture();
+    update.body = '- 改进更新体验。';
+    update.rawJson = { changelog: [{ version: '0.2.0', date: '2026-11-23', changes: ['改进更新体验。'] }] };
+    await controller.check();
+    expect(controller.getSnapshot()).toMatchObject({ notes: update.body, releases: update.rawJson.changelog });
+    expect(update.download).not.toHaveBeenCalled();
+  });
+
+  it('still permits updates when an old manifest omits history or history is malformed', async () => {
+    const { controller, update, dependencies } = fixture();
+    update.rawJson = { changelog: [{ version: 'invalid' }] };
+    await controller.check();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'available', notes: '', releases: [] });
+    await controller.activate();
+    expect(dependencies.relaunch).toHaveBeenCalled();
+  });
+
   it('checks, downloads, saves, installs and relaunches with one click', async () => {
     const { controller, order } = fixture();
     await controller.activate();

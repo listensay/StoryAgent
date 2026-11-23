@@ -40,10 +40,12 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           import { validateReleaseVersion } from './scripts/updater-manifest.mjs';
+          import { releaseRecord } from './src/changelog.mjs';
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
           const config = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
           const cargo = readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
           validateReleaseVersion(process.env.RELEASE_TAG, [pkg.version, config.version, cargo]);
+          releaseRecord(readFileSync('CHANGELOG.md', 'utf8'), pkg.version);
           NODE
       - name: Prepare draft release
         id: release
@@ -51,14 +53,18 @@ jobs:
         with:
           script: |
             const tag = process.env.RELEASE_TAG;
+            const { readFile } = await import('node:fs/promises');
+            const { releaseRecord, releaseNotes } = await import(`${process.env.GITHUB_WORKSPACE}/src/changelog.mjs`);
+            const body = releaseNotes(releaseRecord(await readFile('CHANGELOG.md', 'utf8'), tag.slice(1)));
             let release;
             try {
               release = (await github.rest.repos.getReleaseByTag({ ...context.repo, tag })).data;
               if (!release.draft) throw new Error('This version is already published; create a new version tag.');
+              await github.rest.repos.updateRelease({ ...context.repo, release_id: release.id, body });
             } catch (error) {
               if (error.status !== 404) throw error;
               release = (await github.rest.repos.createRelease({ ...context.repo, tag_name: tag,
-                name: `StoryAgent ${tag}`, draft: true, prerelease: tag.includes('-'), generate_release_notes: true })).data;
+                name: `StoryAgent ${tag}`, draft: true, prerelease: tag.includes('-'), body })).data;
             }
             return release.id;
 

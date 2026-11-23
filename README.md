@@ -24,7 +24,7 @@ StoryAgent 是以小说项目为中心的 Agent 创作桌面工具，面向长�
 | 拆文分析 | 分析开篇、章节或全文中的人物、结构、节奏、伏笔与写作手法，长文本分段分析与逐层综合，通过段落引用定位原文。 |
 | Skill 训练营 | 从列表选择提炼或导入的 Skill，进入对应页面选择训练方式；提炼原文章节内容与创作提示词，使用 Skill 生成正文并与原文对照；支持 AI 对比提出 Skill 规则调整、手写反馈、片段评价与可选评分，按反馈调整 Skill，查看各轮 Skill 改动并保留最佳版本；确认效果满意后可进行其他场景训练。 |
 | 全局任务 | 悬停 Logo 查看 AI 与正文采集任务，跨页面持续执行，点击返回对应页面，支持停止、恢复与失败重试。 |
-| 软件更新 | 自动检查 GitHub Release，右上角显示更新入口与下载进度；点击后校验签名，等待任务结束，保存工作区并安装、重启。 |
+| 软件更新 | 自动检查 GitHub Release，发现新版本时高亮显示右上角更新入口；查看版本更新记录后确认安装，校验签名、等待任务结束并保存工作区后重启。 |
 | 导入与导出 | 导入 TXT、Markdown 小说，导出正文；通过 JSON 备份和恢复整个工作区。 |
 
 ## 技术栈
@@ -92,6 +92,8 @@ npm run ui:build
 GitHub Actions 在推送 `v*` 版本标签时构建 macOS（Apple Silicon、Intel）、Windows x64 安装包和 Linux x64 AppImage，以及对应的签名更新包。版本标签须与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 的版本一致。所有平台构建成功后，工作流生成 `latest.json` 并发布 Release；预发布版本不进入稳定更新入口。
 
 将 App 改动提交到 `main` 后，在干净工作区执行 `npm run release`。命令默认递增修订版本，同步版本与锁文件，运行检查，提交并推送版本标签，等待 GitHub 发布完成。发布需要已登录的 [GitHub CLI](https://cli.github.com/) 和仓库签名密钥；可用 `npm run release -- 0.2.0` 指定版本，或用 `npm run release -- --dry-run` 查看计划。
+
+每个发布版本需在 [更新记录](CHANGELOG.md) 中填写简短的功能改进与修复；GitHub Release 与 App 更新弹窗使用相同记录。
 
 在仓库的 Actions Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY`，内容为与 `tauri.conf.json` 公钥对应的 Tauri 签名私钥；加密私钥同时配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。私钥应保存在仓库外，并保留安全备份。首次配置签名身份可使用 `npm run tauri signer generate -- -w ~/.tauri/storyagent.key`，将生成的公钥内容填写到 `plugins.updater.pubkey`。
 

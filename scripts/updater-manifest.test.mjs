@@ -10,7 +10,7 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(p
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'storyagent-manifest-test-'));
   directories.push(directory);
-  const options = { directory, repository: 'listensay/StoryAgent', tag: 'v0.2.0', version: '0.2.0', productName: 'storyagent' };
+  const options = { directory, repository: 'listensay/StoryAgent', tag: 'v0.2.0', version: '0.2.0', productName: 'storyagent', changelog: '## 0.2.0 · 2026-11-23\n- 支持查看更新记录。\n\n## 0.1.0 · 2026-11-22\n- 支持小说创作。' };
   const names = ['darwin_aarch64.app.tar.gz', 'darwin_x64.app.tar.gz', 'linux_amd64.AppImage', 'windows_x64-setup.exe'].map(suffix => `storyagent_0.2.0_${suffix}`);
   for (const name of names) {
     await writeFile(join(directory, name), 'signed bundle');
@@ -25,6 +25,15 @@ it('maps all desktop platforms to version-specific GitHub downloads and signatur
   expect(Object.keys(manifest.platforms)).toEqual(['darwin-aarch64', 'darwin-x86_64', 'linux-x86_64', 'windows-x86_64']);
   expect(manifest.platforms['darwin-x86_64']).toEqual({ signature: 'c2lnbmF0dXJl', url: 'https://github.com/listensay/StoryAgent/releases/download/v0.2.0/storyagent_0.2.0_darwin_x64.app.tar.gz' });
   expect(manifest.version).toBe('0.2.0');
+  expect(manifest.notes).toBe('- 支持查看更新记录。');
+  expect(manifest.changelog.map(record => record.version)).toEqual(['0.2.0', '0.1.0']);
+});
+
+it('refuses to publish missing, mismatched or oversized release notes', async () => {
+  const { options } = await fixture();
+  for (const changelog of ['', options.changelog.replace('0.2.0', '0.2.1'), `## 0.2.0 · 2026-11-23\n- ${'文'.repeat(81)}`]) {
+    await expect(createUpdaterManifest({ ...options, changelog })).rejects.toThrow();
+  }
 });
 
 it('refuses to publish a partial platform manifest', async () => {

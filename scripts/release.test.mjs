@@ -10,6 +10,7 @@ const execute = promisify(execFile), directories = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
 
 const sources = {
+  'CHANGELOG.md': '# 更新记录\n\n## 0.1.1 · 2026-11-23\n\n- 支持查看版本更新记录。\n',
   'package.json': '{\n  "name": "storyagent",\n  "version": "0.1.0"\n}\n',
   'package-lock.json': '{\n  "version": "0.1.0",\n  "packages": {\n    "": { "version": "0.1.0" },\n    "node_modules/other": { "version": "0.1.0" }\n  }\n}\n',
   'src-tauri/tauri.conf.json': '{\n  "productName": "storyagent",\n  "version": "0.1.0",\n  "plugins": { "updater": { "endpoints": ["https://github.com/listensay/StoryAgent/releases/latest/download/latest.json"] } }\n}\n',
@@ -32,7 +33,7 @@ async function fixture({ fail, secrets = 'TAURI_SIGNING_PRIVATE_KEY', pendingRun
   await git('config', `url.${origin}.insteadOf`, 'https://github.com/listensay/StoryAgent.git');
   await git('remote', 'add', 'origin', 'https://github.com/listensay/StoryAgent.git');
   for (const [file, content] of Object.entries(sources)) await writeFile(join(repository, file), content);
-  await git('add', '--', ...versionFiles);
+  await git('add', '--', ...versionFiles, 'CHANGELOG.md');
   await git('commit', '-m', 'App changes');
   await git('push', 'origin', 'main');
   const calls = [], writes = [], logs = [], pauses = [];
@@ -139,8 +140,21 @@ it('leaves validation failures local without creating a tag or pushing', async (
   expect(test.logs.some(text => text.startsWith('Published'))).toBe(false);
 });
 
+it('blocks missing or oversized version records before changing versions or pushing', async () => {
+  for (const changelog of ['## 0.1.0 · 2026-11-23\n- 旧版本。', `## 0.1.1 · 2026-11-23\n- ${'文'.repeat(81)}`]) {
+    const test = await fixture();
+    await writeFile(join(test.repository, 'CHANGELOG.md'), changelog);
+    await test.git('add', 'CHANGELOG.md');
+    await test.git('commit', '-m', 'Version record');
+    await expect(release(test.dependencies)).rejects.toThrow();
+    expect(test.writes).toEqual([]);
+    expect(await test.git('tag', '--list')).toBe('');
+    expect(test.calls.some(call => call[0] === 'git' && call[1] === 'push')).toBe(false);
+  }
+});
+
 it('does not stage edits made by another process during validation', async () => {
-  for (const file of ['concurrent.txt', 'package.json']) {
+  for (const file of ['concurrent.txt', 'package.json', 'CHANGELOG.md']) {
     const test = await fixture();
     const run = async (command, args) => {
       if (command === 'npm' && args[0] === 'test') await writeFile(join(test.repository, file), 'Concurrent work');
