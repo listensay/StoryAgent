@@ -1,3 +1,4 @@
+import { characterProfileRules } from './characterProfile';
 import { noteNames, taskNames, uid, type Workspace, type Project, type Job, type JobStep, type AIConfig, type Skill } from './domain';
 import novelAssistantSkill from './skills/novel-assistant/SKILL.md?raw';
 import { novelContext } from './novelAssistant';
@@ -162,6 +163,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
     train: '完成 Skill 训练。', collect: '采集正文。',
     memory: '仅从正文提取记忆。只输出合法 JSON，不加代码围栏，格式：{"summary":"本章摘要","notes":[{"kind":"fact|state|timeline|foreshadow|knowledge","title":"简短名称","body":"具体事实"}]}。kind 必须是列举值之一。不要混入大纲和外部参考。',
   };
+  if (job.kind === 'revise' || (job.kind === 'prepare' && !step.intermediate)) outputRules[job.kind] += '\n' + characterProfileRules;
   if (job.kind === 'style') outputRules.style += '\n' + expressionEvidenceRules;
   const prose = ['draft', 'continue', 'rewrite'].includes(job.kind);
   const instruction = ['summary', 'memory'].includes(step.stage ?? '') ? '' : !prose && step.stage ? job.instruction.replace(/\n目标篇幅约 \d+ 字。\s*$/, '').trim() : job.instruction.trim();

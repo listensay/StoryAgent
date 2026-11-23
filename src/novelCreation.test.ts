@@ -3,6 +3,7 @@ import { defaultAdvanced, emptyWorkspace, newAISelection, parseWorkspace, type W
 import { createCreationRound, creationContextKey, creationGenre, creationPrompt, finishCreationRound, newCreationDraft, parseCreationOptions, projectFromCreation, selectCreationOption, selectedCreationOption, setCreationDirection } from './novelCreation';
 import { type CreationDraft, type CreationStage } from './novelCreationData';
 import { requirePreparation } from './jobWorkflow';
+import { formatCharacterProfile } from './characterProfile';
 import { buildCharacterGraph } from './characterRelations';
 
 const genres = () => ({ options: Array.from({ length: 6 }, (_, index) => ({ title: `题材${index + 1}`, genre: `科幻悬疑${index + 1}`, premise: `修复记忆的主角卷入案件${index + 1}` })) });
@@ -60,6 +61,20 @@ describe('guided novel creation', () => {
     expect(graph.unlinked).toHaveLength(1); expect(graph.unlinked[0].body).toContain('未知人物');
     const restored = parseWorkspace(JSON.stringify(state)).creationDraft!;
     expect(selectedCreationOption(restored, 'outline')!.relationships).toEqual(selected.relationships);
+  });
+  it('保留新方案的完整人物档案并继续读取旧方案', () => {
+    const state = workspace(), draft = newCreationDraft('科幻悬疑', '记忆修复师');
+    complete(state, draft, 'core'); complete(state, draft, 'outline');
+    const option = selectedCreationOption(draft, 'outline')!;
+    const body = formatCharacterProfile({ fields: { 身份: '修复师', 口头禅: '先留证据', 朋友: '许宁：同伴' }, extra: '' }, '林舟');
+    const output = { options: Array.from({ length: 3 }, (_, index) => ({ ...option, title: `完整方案${index}`, characters: option.characters.map((character, i) => i ? character : { ...character, body }) })) };
+    const parsed = parseCreationOptions(JSON.stringify(output), 'outline');
+    draft.rounds[draft.rounds.length - 1].options = parsed;
+    selectCreationOption(draft, parsed[0].id);
+    state.creationDraft = draft;
+    const restored = parseWorkspace(JSON.stringify(state)).creationDraft!;
+    expect(projectFromCreation(restored).notes.find(note => note.title === '林舟')?.body).toBe(body);
+    expect(creationPrompt(restored, 'outline', '继续').system).toContain('道德底线');
   });
   it('keeps the author scope and carries core feedback into outline generation', () => {
     const idea = '先卖手机，再上线短视频、游戏、电影、音乐，再发展美食、职业比赛、房地产与洗脚按摩';

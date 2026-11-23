@@ -4,6 +4,7 @@ import { Box, Group, Stack, Text, UnstyledButton } from '@mantine/core';
 import { Button, EmptyState, Paper } from './components';
 import { buildCharacterGraph, characterNodeSize, characterPositions, layoutCharacters, newCharacterRelation } from './characterRelations';
 import { routeCharacterRelations, type CharacterPort, type CharacterRoute } from './characterRouting';
+import { characterSummary } from './characterProfile';
 import type { Note } from './domain';
 import '@xyflow/react/style.css';
 import './CharacterGraph.css';
@@ -58,7 +59,7 @@ function CharacterGraphCanvas({ notes, onEdit, onPositions }: Props) {
       return {
         ...existing, id: character.id, type: 'character', position: existing?.dragging ? existing.position : positions[character.id],
         ...characterNodeSize, ariaLabel: `人物：${character.title}`,
-        data: { ports: [], title: character.title, description: character.body.split('\n').find(line => line.trim())?.replace(/^[#\s*]*(?:身份与作用|身份)[：:]\s*/, '') ?? '', edit: () => onEdit({ ...character }) },
+        data: { ports: [], title: character.title, description: characterSummary(character.body), edit: () => onEdit({ ...character }) },
       };
     }));
   }, [graph, positions, onEdit, setNodes]);

@@ -1,0 +1,11 @@
+.character-profile-editor { flex: 1; min-height: 0; overflow: hidden; }
+.character-profile-editor > .mantine-Tabs-list { width: 168px; flex-shrink: 0; flex-wrap: nowrap; min-height: 0; overflow-y: auto; padding-right: 12px; }
+.character-profile-editor > .mantine-Tabs-list .mantine-Tabs-tab { min-height: 40px; flex-shrink: 0; font-size: var(--mantine-font-size-sm); }
+.character-profile-editor > .mantine-Tabs-panel { min-width: 0; overflow-y: auto; padding: 4px 12px 20px 24px; }
+@media (max-width: 800px) {
+  .character-profile-editor > .mantine-Tabs-list { width: 142px; padding-right: 6px; }
+  .character-profile-editor > .mantine-Tabs-panel { padding-left: 16px; }
+}
+
+.character-section-number { color: var(--mantine-color-dimmed); }
+.character-profile-editor .mantine-Tabs-tab[data-active] .character-section-number { color: var(--mantine-color-white); }

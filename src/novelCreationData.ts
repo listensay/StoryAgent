@@ -12,7 +12,7 @@ export const coreOptionSchema = z.object({
 });
 export const outlineOptionSchema = z.object({
   stage: z.literal('outline'), title: text, summary: text, outline: text,
-  characters: z.array(z.object({ name: text, role: text, motivation: text, arc: text, relations: text })).min(1),
+  characters: z.array(z.object({ name: text, role: text, motivation: text, arc: text, relations: text, body: text.optional() })).min(1),
   relationships: z.array(z.object({ source: text, target: text, title: text, body: text })).optional(),
   volumes: z.array(z.object({ title: text, summary: text, turningPoints: text, ending: text })).min(1),
 });

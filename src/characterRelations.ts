@@ -52,9 +52,9 @@ export function buildCharacterGraph(notes: Note[]) {
   }
   // Guided creation and older projects keep relationships inside character profiles.
   for (const character of characters) {
-    const section = character.body.match(/(?:^|\n)[#\t *]*人物关系[\t *]*[：:]?[\t *]*([\s\S]*?)(?=\n[\t ]*#{1,6}[\t ]|\n[\t *]*(?:身份与作用|身份|目标与动机|动机|人物弧线|性格|背景|外貌)[\t *]*[：:]|$)/u)?.[1];
-    if (!section) continue;
-    for (const sentence of section.split(/[\n。；;]/u).map(value => value.trim()).filter(Boolean)) {
+    const sections = [...character.body.matchAll(/(?:^|\n)[#\t *]*(?:\d+[.、．]\s*)?人物关系[\t *]*[：:]?[\t *]*([\s\S]*?)(?=\n[\t ]*#{1,6}[\t ]|\n[\t *]*(?:身份与作用|身份|目标与动机|动机|人物弧线|性格|背景|外貌)[\t *]*[：:]|$)/gu)].map(match => match[1]).join("\n");
+    if (!sections) continue;
+    for (const sentence of sections.split(/[\n。；;]/u).map(value => value.trim()).filter(Boolean)) {
       const targets = characterMentions(sentence, characters).filter(target => target.id !== character.id);
       if (targets.length !== 1) continue;
       const targetId = targets[0].id, pair = pairKey(character.id, targetId);
