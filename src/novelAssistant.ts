@@ -11,12 +11,13 @@ const resultSchema = z.object({
   project: projectPatch.optional(),
   notes: z.array(z.object({ id: text.optional(), kind: z.enum(editableNoteKinds), title: text, body: text, source: text.optional(), target: text.optional() }).strict()).default([]),
   removeNoteIds: z.array(text).default([]),
-  chapters: z.array(z.object({ id: text.optional(), title: text.optional(), plan: text }).strict()).default([]),
+  chapters: z.array(z.object({ id: text.optional(), title: text.optional(), plan: z.string().trim() }).strict()).default([]),
 }).strict();
 export type NovelResult = z.infer<typeof resultSchema>;
+const invalidResultMessage = 'AI 返回的调整格式无效，请重新生成';
 export function parseNovelResult(output: string) {
   try { return resultSchema.parse(parseJSON(output)); }
-  catch { throw new Error('AI 返回的调整格式无效，请重新生成'); }
+  catch { throw new Error(invalidResultMessage); }
 }
 export const hasNovelChanges = (result: NovelResult) => !!Object.keys(result.project ?? {}).length || !!result.notes.length || !!result.removeNoteIds.length || !!result.chapters.length;
 export const novelFields = { title: '书名', genre: '题材', form: '形式', targetWords: '目标字数', theme: '主题', audience: '读者定位', synopsis: '简介', outline: '故事总纲' } as const;
@@ -26,6 +27,21 @@ function editableContent(project: Project) {
 }
 export function novelSnapshot(project: Project) {
   return contentHash(JSON.stringify({ ...editableContent(project), references: project.referenceIds, skills: project.skillIds, continuity: project.notes.filter(note => !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])), manuscripts: project.chapters.map(({ id, content, summary }) => ({ id, content: contentHash(content), summary })) }));
+}
+
+export function recoverNovelJobs(state: Workspace) {
+  for (const job of state.jobs) {
+    if (!job.novelChat || job.status !== 'failed' || job.error !== invalidResultMessage || job.steps.length !== 1) continue;
+    const project = state.projects.find(value => value.id === job.projectId);
+    if (!project || novelSnapshot(project) !== job.novelChat.base) continue;
+    try {
+      const result = parseNovelResult(job.steps[0].output);
+      applyNovelResult(project, result);
+      job.steps[0].status = hasNovelChanges(result) ? 'ready' : 'accepted';
+      job.status = job.steps[0].status;
+      job.error = '';
+    } catch { /* Invalid or conflicting proposals still require a new reply. */ }
+  }
 }
 
 export function novelContext(state: Workspace, job: Job) {

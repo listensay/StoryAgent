@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createJob, defaultAdvanced, emptyWorkspace, newAISelection, newProject, parseWorkspace, type Note } from './domain';
-import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, undoNovel } from './novelAssistant';
+import { createJob, defaultAdvanced, emptyWorkspace, newAISelection, newChapter, newProject, parseWorkspace, type Note } from './domain';
+import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, recoverNovelJobs, undoNovel } from './novelAssistant';
 import { buildPrompt } from './prompts';
 
 const ai = { ...newAISelection(), ...defaultAdvanced() };
@@ -17,6 +17,52 @@ function setup() {
 }
 const proposal = () => ({ reply: '统一调整', project: { synopsis: '文化产业与城市发展', outline: '新总纲' }, notes: [{ id: 'hero', kind: 'character', title: '陆昭', body: '开局最高修为' }, { id: 'world', kind: 'world', title: '文化入侵系统', body: '只提供技术，不提供作品' }, { kind: 'volume', title: '第一卷 手机入城', body: '十灵石手机与抖音' }, { kind: 'character', title: '新作者', body: '本土文人' }, { kind: 'relation', title: '文学合作', body: '共同创办文学平台', source: '陆昭', target: '新作者' }], removeNoteIds: ['volume'] });
 describe('小说 AI 联动更新', () => {
+  it('清空已有章节计划，采用和撤销均保留章节、正文、摘要与版本', () => {
+    const { state, project, job } = setup();
+    project.chapters[0].plan = '原章节计划';
+    project.chapters[0].versions = [{ id: 'version', content: '历史正文', createdAt: project.createdAt, label: '编辑前' }];
+    project.chapters.push({ ...newChapter('第二章'), plan: '第二章计划' });
+    const original = structuredClone(project.chapters);
+    job.novelChat!.base = novelSnapshot(project);
+    job.steps[0].output = '```json\n' + JSON.stringify({ reply: '清空章节计划', chapters: original.map(({ id }) => ({ id, plan: '' })) }) + '\n```';
+    const result = parseNovelResult(job.steps[0].output);
+    expect(hasNovelChanges(result)).toBe(true);
+    expect(result.chapters[0].plan).toBe('');
+    acceptNovel(state, job); job.status = 'accepted';
+    expect(project.chapters.map(({ updatedAt: _, ...chapter }) => chapter)).toEqual(original.map(({ updatedAt: _, ...chapter }) => ({ ...chapter, plan: '' })));
+    const restored = parseWorkspace(JSON.stringify(state));
+    undoNovel(restored, restored.jobs[0]);
+    expect(restored.projects[0].chapters.map(({ updatedAt: _, ...chapter }) => chapter)).toEqual(original.map(({ updatedAt: _, ...chapter }) => chapter));
+  });
+  it.each([undefined, null, 0, false, {}, []])('章节计划仍须为字符串：%j', plan => {
+    expect(() => parseNovelResult(JSON.stringify({ reply: '调整', chapters: [{ id: 'chapter', plan }] }))).toThrow('调整格式无效');
+  });
+  it('恢复被旧校验误判的完整回复，等待采用且不改动小说', () => {
+    const { state, project, job } = setup();
+    project.chapters[0].plan = '原章节计划';
+    job.novelChat!.base = novelSnapshot(project);
+    job.status = 'failed'; job.error = 'AI 返回的调整格式无效，请重新生成';
+    job.steps[0].output = JSON.stringify({ reply: '清空章节计划', chapters: [{ id: project.chapters[0].id, plan: '' }] });
+    const original = structuredClone(project), output = job.steps[0].output;
+    recoverNovelJobs(state);
+    expect(job).toMatchObject({ status: 'ready', error: '', steps: [{ status: 'ready', output }] });
+    expect(project).toEqual(original);
+    acceptNovel(state, job);
+    expect(project.chapters[0]).toMatchObject({ id: original.chapters[0].id, plan: '', content: '原正文', summary: '原摘要' });
+  });
+  it.each(['stale', 'incomplete', 'conflict', 'network', 'paused'])('不恢复过期、不完整、冲突或其他失败的回复：%s', failure => {
+    const { state, project, job } = setup();
+    job.status = 'failed'; job.error = 'AI 返回的调整格式无效，请重新生成';
+    job.steps[0].output = JSON.stringify({ reply: '清空章节计划', chapters: [{ id: project.chapters[0].id, plan: '' }] });
+    if (failure === 'stale') project.outline = '已更新总纲';
+    if (failure === 'incomplete') job.steps[0].output = '{"reply":"清空章节计划","chapters":[';
+    if (failure === 'conflict') job.steps[0].output = '{"reply":"清空章节计划","chapters":[{"id":"missing","plan":""}]}';
+    if (failure === 'network') job.error = '生成连接中断，可继续生成';
+    if (failure === 'paused') job.status = 'paused';
+    const original = structuredClone(state);
+    recoverNovelJobs(state);
+    expect(state).toEqual(original);
+  });
   it('一次更新多个页面，沿用人物 ID、保留正文记忆，并连接新增人物', () => {
     const { project } = setup();
     const result = parseNovelResult(JSON.stringify({ ...proposal(), chapters: [{ id: project.chapters[0].id, title: '第一章 城主上任', plan: '接手衰败城池' }, { title: '第二章 十灵石', plan: '推广手机' }] }));

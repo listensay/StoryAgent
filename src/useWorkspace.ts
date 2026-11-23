@@ -17,7 +17,7 @@ import { runArticleCollection, runCollection } from './collectionTask';
 import { createCreationRound, creationContextKey, finishCreationRound, newCreationDraft, parseCreationOptions, projectFromCreation, selectCreationOption, selectedCreationOption, setCreationDirection } from './novelCreation';
 import { type CreationStage } from './novelCreationData';
 import { acceptPlanning, hasPlanningChanges, parsePlanningResult, planningSnapshot } from './planning';
-import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, undoNovel } from './novelAssistant';
+import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, recoverNovelJobs, undoNovel } from './novelAssistant';
 export { parseMemory } from './jobWorkflow';
 
 type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; targetWords?: number; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training']; planningChat?: boolean; skillTarget?: Job['skillTarget'] };
@@ -51,7 +51,7 @@ export function useWorkspace() {
   const setAISelection = useCallback((selection: AISelection) => update(s => { s.aiSelection = { ...selection }; }), [update]);
   useEffect(() => {
     let alive = true; mounted.current = true;
-    loadWorkspace().then(data => { if (!alive) return; stateRef.current = data; setState(data); setLoaded(true); setSaveStatus('已保存'); }).catch(e => { if (alive) { setLoadError(`项目数据加载失败：${String(e)}`); setSaveStatus('加载失败'); } });
+    loadWorkspace().then(data => { if (!alive) return; recoverNovelJobs(data); stateRef.current = data; setState(data); setLoaded(true); setSaveStatus('已保存'); }).catch(e => { if (alive) { setLoadError(`项目数据加载失败：${String(e)}`); setSaveStatus('加载失败'); } });
     return () => { alive = false; mounted.current = false; };
   }, []);
   useEffect(() => {
