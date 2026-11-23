@@ -1,7 +1,12 @@
-import { createTheme, ActionIcon, Badge, Button, Checkbox, Group, Input, InputWrapper, Modal, NavLink, NumberInput, Paper, ScrollArea, Select, Tabs, Text, Textarea, Tooltip } from '@mantine/core';
+import { createTheme, ActionIcon, Badge, Button, Checkbox, Group, Input, InputWrapper, Modal, NavLink, NumberInput, Paper, ScrollArea, Select, Tabs, Text, Textarea, Tooltip, type ScrollAreaAutosizeProps } from '@mantine/core';
 import { createElement } from 'react';
 import { Check } from './icons';
 import classes from './theme.module.css';
+
+function ModalScrollArea(props: ScrollAreaAutosizeProps) {
+  // Autosize's min-content width lets long code lines expand the entire dialog.
+  return createElement(ScrollArea.Autosize, { ...props, scrollbars: 'y', styles: { content: { minWidth: 0 } } });
+}
 
 export const theme = createTheme({
   primaryColor: 'story',
@@ -36,7 +41,7 @@ export const theme = createTheme({
     InputWrapper: InputWrapper.extend({ styles: { label: { fontSize: '14px', color: '#595959', marginBottom: 6 } } }),
     Textarea: Textarea.extend({ styles: { input: { lineHeight: 1.8 } } }),
     Modal: Modal.extend({
-      defaultProps: { centered: true, radius: 'lg', padding: 'lg', scrollAreaComponent: ScrollArea.Autosize, transitionProps: { transition: 'fade-down', duration: 200, timingFunction: 'ease-out' }, overlayProps: { backgroundOpacity: .3, blur: 2 }, closeButtonProps: { 'aria-label': '关闭' } },
+      defaultProps: { centered: true, radius: 'lg', padding: 'lg', scrollAreaComponent: ModalScrollArea, transitionProps: { transition: 'fade-down', duration: 200, timingFunction: 'ease-out' }, overlayProps: { backgroundOpacity: .3, blur: 2 }, closeButtonProps: { 'aria-label': '关闭' } },
       styles: {
         content: { overflow: 'hidden', border: 0 },
         title: { fontSize: '20px', fontWeight: 600 },
