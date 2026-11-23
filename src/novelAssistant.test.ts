@@ -17,6 +17,111 @@ function setup() {
 }
 const proposal = () => ({ reply: '统一调整', project: { synopsis: '文化产业与城市发展', outline: '新总纲' }, notes: [{ id: 'hero', kind: 'character', title: '陆昭', body: '开局最高修为' }, { id: 'world', kind: 'world', title: '文化入侵系统', body: '只提供技术，不提供作品' }, { kind: 'volume', title: '第一卷 手机入城', body: '十灵石手机与抖音' }, { kind: 'character', title: '新作者', body: '本土文人' }, { kind: 'relation', title: '文学合作', body: '共同创办文学平台', source: '陆昭', target: '新作者' }], removeNoteIds: ['volume'] });
 describe('小说 AI 联动更新', () => {
+  it('移除全部未写作章节，包括已经清空计划正文的章节，不生成占位章节', () => {
+    const { state, project, job } = setup();
+    project.chapters = Array.from({ length: 21 }, (_, index) => newChapter(`第${index + 1}章`));
+    const ids = project.chapters.map(chapter => chapter.id);
+    job.novelChat!.base = novelSnapshot(project);
+    job.steps[0].output = JSON.stringify({ reply: '移除全部章节规划', removeChapterIds: ids });
+    const result = parseNovelResult(job.steps[0].output);
+    expect(hasNovelChanges(result)).toBe(true);
+    expect(applyNovelResult(project, result).chapters).toEqual([]);
+    expect(project.chapters).toHaveLength(21);
+    acceptNovel(state, job); job.status = 'accepted';
+    expect(project.chapters).toEqual([]);
+    expect(parseWorkspace(JSON.stringify(state)).projects[0].chapters).toEqual([]);
+  });
+  it('采用、持久化及撤销章节移除，恢复完整章节、标题、顺序和设定关联', () => {
+    const { state, project, job } = setup();
+    const first = { ...newChapter('第一章旧计划'), plan: '第一章的计划', styleId: 'chapter-style' };
+    const last = newChapter('末章空计划');
+    project.chapters.unshift(first); project.chapters.push(last);
+    project.notes.find(note => note.id === 'volume')!.chapterId = first.id;
+    const original = structuredClone(project);
+    job.novelChat!.base = novelSnapshot(project);
+    job.steps[0].output = JSON.stringify({ reply: '替换旧章节规划', removeChapterIds: [first.id, last.id], chapters: [{ title: '新章节计划', plan: '新事件' }] });
+    acceptNovel(state, job); job.status = 'accepted';
+    expect(project.chapters.map(chapter => chapter.title)).toEqual([original.chapters[1].title, '新章节计划']);
+    expect(project.chapters[0]).toEqual(original.chapters[1]);
+    expect(project.notes.find(note => note.id === 'volume')?.chapterId).toBe('');
+    const restored = parseWorkspace(JSON.stringify(state));
+    undoNovel(restored, restored.jobs[0]);
+    expect(restored.projects[0].chapters.map(({ updatedAt: _, ...chapter }) => chapter)).toEqual(original.chapters.map(({ updatedAt: _, ...chapter }) => chapter));
+    expect(restored.projects[0].notes).toEqual(original.notes);
+    expect(novelSnapshot(restored.projects[0])).toBe(novelSnapshot(original));
+    expect(restored.projects[0]).not.toHaveProperty('removedChapters');
+  });
+  it.each(['content', 'summary', 'versions', 'memoryHash', 'fact', 'state', 'timeline', 'foreshadow', 'knowledge', 'reference'] as const)('保护章节已有的正文、历史和关联记录：%s', kind => {
+    const { project } = setup();
+    const chapter = newChapter('受保护章节');
+    project.chapters.push(chapter);
+    if (kind === 'content' || kind === 'summary') chapter[kind] = '已写作内容';
+    else if (kind === 'versions') chapter.versions.push({ id: 'version', content: '历史正文', createdAt: project.createdAt, label: '编辑前' });
+    else if (kind === 'memoryHash') chapter.memoryHash = '记忆指纹';
+    else project.notes.push({ ...note(`linked-${kind}`, kind, '关联记录'), chapterId: chapter.id });
+    const original = structuredClone(project);
+    const result = parseNovelResult(JSON.stringify({ reply: '移除章节', project: { outline: '不得写入' }, removeChapterIds: [chapter.id] }));
+    expect(() => applyNovelResult(project, result)).toThrow('请仅清空计划');
+    expect(project).toEqual(original);
+  });
+  it.each(['missing', 'duplicate', 'update-and-remove'])('拒绝无效或重复章节移除，保持调整原子性：%s', conflict => {
+    const { project } = setup();
+    const chapter = newChapter('未写作章节'); project.chapters.push(chapter);
+    const original = structuredClone(project);
+    const removeChapterIds = conflict === 'missing' ? ['missing'] : conflict === 'duplicate' ? [chapter.id, chapter.id] : [chapter.id];
+    const chapters = conflict === 'update-and-remove' ? [{ id: chapter.id, plan: '新计划' }] : [];
+    expect(() => applyNovelResult(project, parseNovelResult(JSON.stringify({ reply: '调整', project: { outline: '不得写入' }, removeChapterIds, chapters })))).toThrow();
+    expect(project).toEqual(original);
+  });
+  it('采用前新增正文或历史版本时拒绝移除，保留当前数据', () => {
+    const { state, project, job } = setup();
+    const chapter = newChapter('待移除章节'); project.chapters.push(chapter);
+    job.novelChat!.base = novelSnapshot(project);
+    job.steps[0].output = JSON.stringify({ reply: '移除旧章节', removeChapterIds: [chapter.id] });
+    chapter.content = '采用前新正文';
+    expect(() => acceptNovel(state, job)).toThrow('已更新');
+    chapter.content = '';
+    chapter.versions.push({ id: 'version', content: '后来保存的正文', createdAt: project.createdAt, label: '手动保存' });
+    const original = structuredClone(state);
+    expect(() => acceptNovel(state, job)).toThrow('请仅清空计划');
+    expect(state).toEqual(original);
+  });
+  it.each(['draft', 'continue', 'rewrite', 'plan', 'review', 'memory'] as const)('执行 %s 的章节不能通过采用或撤销被移除', kind => {
+    const { state, project, job } = setup();
+    const chapter = newChapter('生成中的章节'); project.chapters.push(chapter);
+    job.novelChat!.base = novelSnapshot(project);
+    job.steps[0].output = JSON.stringify({ reply: '移除旧章节', removeChapterIds: [chapter.id] });
+    const writing = createJob(project, kind, ai, [chapter.id], '章节任务'); state.jobs.push(writing);
+    expect(() => acceptNovel(state, job)).toThrow('正在生成');
+    expect(project.chapters).toContain(chapter);
+    writing.status = 'paused';
+    job.steps[0].output = JSON.stringify({ reply: '新增章节', chapters: [{ title: '新增计划', plan: '计划' }] });
+    acceptNovel(state, job); job.status = 'accepted';
+    const added = project.chapters[project.chapters.length - 1];
+    state.jobs.push(createJob(project, kind, ai, [added.id], '新章节任务'));
+    const original = structuredClone(state);
+    expect(() => undoNovel(state, job)).toThrow('正在生成');
+    expect(state).toEqual(original);
+  });
+  it('撤销不移除后来新增历史版本的章节', () => {
+    const { state, project, job } = setup();
+    job.steps[0].output = JSON.stringify({ reply: '新增章节', chapters: [{ title: '新计划章节', plan: '计划' }] });
+    acceptNovel(state, job); job.status = 'accepted';
+    project.chapters[1].versions.push({ id: 'version', content: '后来保存的正文', createdAt: project.createdAt, label: '手动保存' });
+    const original = structuredClone(state);
+    expect(() => undoNovel(state, job)).toThrow('无法撤销');
+    expect(state).toEqual(original);
+  });
+  it('旧版本的采用记录仍能撤销并保留正文', () => {
+    const { state, job } = setup();
+    job.steps[0].output = JSON.stringify(proposal());
+    acceptNovel(state, job); job.status = 'accepted';
+    const saved = JSON.parse(job.novelChat!.before!); delete saved.removedChapters;
+    job.novelChat!.before = JSON.stringify(saved);
+    const restored = parseWorkspace(JSON.stringify(state));
+    undoNovel(restored, restored.jobs[0]);
+    expect(restored.projects[0]).toMatchObject({ outline: '旧总纲', chapters: [{ content: '原正文', summary: '原摘要' }] });
+  });
   it('清空已有章节计划，采用和撤销均保留章节、正文、摘要与版本', () => {
     const { state, project, job } = setup();
     project.chapters[0].plan = '原章节计划';
@@ -120,7 +225,10 @@ describe('小说 AI 联动更新', () => {
     state.skills = []; // Required interface instructions do not depend on skill toggles.
     const next = createJob(project, 'revise', ai, [], '继续调整'); next.novelChat = { base: novelSnapshot(project), previousJobIds: [job.id] };
     const prompt = buildPrompt(state, next, next.steps[0], ai);
-    expect(prompt.system).toContain('removeNoteIds'); expect(prompt.system).toContain('source');
+    expect(prompt.system).toContain('removeNoteIds'); expect(prompt.system).toContain('removeChapterIds'); expect(prompt.system).toContain('source');
+    project.chapters.push(newChapter('可移除章节'));
+    const currentPrompt = buildPrompt(state, next, next.steps[0], ai);
+    expect(currentPrompt.user).toContain(`"removableChapterIds":["${project.chapters[1].id}"]`);
     expect(prompt.user).toContain('沈游'); expect(prompt.user).toContain('旧卷纲'); expect(prompt.user).toContain('先讨论主线');
     expect(hasNovelChanges(parseNovelResult(job.steps[0].output))).toBe(false);
     expect(parseWorkspace(JSON.stringify(state)).skills.some(skill => skill.id === 'builtin-revise')).toBe(true);

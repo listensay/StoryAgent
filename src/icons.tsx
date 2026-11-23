@@ -1,6 +1,6 @@
 import { HugeiconsIcon, type HugeiconsIconProps, type IconSvgElement } from '@hugeicons/react';
 import {
-  Add01Icon, Cancel01Icon, ArrowDown01Icon, ArrowUp01Icon, ArrowRight01Icon,
+  Add01Icon, Cancel01Icon, ArrowDown01Icon, ArrowUp01Icon, ArrowRight01Icon, ArrowUpToLineIcon, ArrowDownToLineIcon,
   BookOpen01Icon, QuillWrite01Icon, File01Icon, LibraryIcon, WorkflowCircle01Icon,
   Notebook01Icon, PuzzleIcon, Settings02Icon, AiSparklesIcon, AnalyticsUpIcon,
   Copy01Icon, Clock01Icon, FloppyDiskIcon, Download01Icon, Upload01Icon,
@@ -18,6 +18,8 @@ export const Plus = icon(Add01Icon);
 export const X = icon(Cancel01Icon);
 export const ArrowDown = icon(ArrowDown01Icon);
 export const ArrowUp = icon(ArrowUp01Icon);
+export const MoveToTop = icon(ArrowUpToLineIcon);
+export const MoveToBottom = icon(ArrowDownToLineIcon);
 export const ChevronDown = icon(ArrowDown01Icon);
 export const ChevronUp = icon(ArrowUp01Icon);
 export const ChevronRight = icon(ArrowRight01Icon);

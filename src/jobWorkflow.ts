@@ -30,10 +30,6 @@ export function openWriting(state: Workspace, projectId: string) {
   const project = state.projects.find(p => p.id === projectId);
   if (!project) return;
   state.activeProjectId = project.id;
-  if (!project.chapters.length) {
-    project.chapters.push(newChapter(project.form === 'short' ? '正文' : '第一章'));
-    project.updatedAt = now();
-  }
   return project.chapters[project.chapters.length - 1];
 }
 export function writingTarget(project: Project | undefined, kind: TaskKind, chapterIds: string[]) {

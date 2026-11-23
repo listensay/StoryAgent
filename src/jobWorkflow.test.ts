@@ -12,15 +12,15 @@ function setup(kind: 'draft' | 'continue' | 'rewrite' = 'draft') {
   return { state, project, chapter, job };
 }
 describe('创作准备与自动写作流程', () => {
-  it.each(['long', 'short'] as const)('打开空%s小说时创建章节，重复打开保持同一章节且不启动任务', form => {
+  it.each(['long', 'short'] as const)('打开空%s小说时保持章节为空，重复打开不补建章节或启动任务', form => {
     const state = emptyWorkspace(), project = newProject('空小说', form); project.chapters = []; project.updatedAt = '旧时间';
     state.projects = [project];
     const chapter = openWriting(state, project.id);
     expect(state.activeProjectId).toBe(project.id);
-    expect(chapter?.title).toBe(form === 'long' ? '第一章' : '正文');
-    expect(project.chapters).toEqual([chapter]); expect(project.updatedAt).not.toBe('旧时间');
+    expect(chapter).toBeUndefined();
+    expect(project.chapters).toEqual([]); expect(project.updatedAt).toBe('旧时间');
     const saved = structuredClone(state);
-    expect(openWriting(state, project.id)?.id).toBe(chapter?.id);
+    expect(openWriting(state, project.id)).toBeUndefined();
     expect(state).toEqual(saved); expect(state.jobs).toEqual([]);
   });
   it('打开已有小说返回排序后的最后一章，保留正文、版本、设定和已有任务', () => {

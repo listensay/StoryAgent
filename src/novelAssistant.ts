@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { newChapter, now, uid, type Job, type Note, type Project, type Workspace } from './domain';
+import { newChapter, now, uid, type Chapter, type Job, type Note, type Project, type Workspace } from './domain';
 import { contentHash, parseJSON } from './jobWorkflow';
 import { resolveCharacterRelation } from './characterRelations';
+import { requireIdleChapters } from './chapterOperations';
 
 export const editableNoteKinds = ['character', 'relation', 'world', 'volume', 'scene', 'branch'] as const;
 const text = z.string().trim().min(1);
@@ -12,6 +13,7 @@ const resultSchema = z.object({
   notes: z.array(z.object({ id: text.optional(), kind: z.enum(editableNoteKinds), title: text, body: text, source: text.optional(), target: text.optional() }).strict()).default([]),
   removeNoteIds: z.array(text).default([]),
   chapters: z.array(z.object({ id: text.optional(), title: text.optional(), plan: z.string().trim() }).strict()).default([]),
+  removeChapterIds: z.array(text).default([]),
 }).strict();
 export type NovelResult = z.infer<typeof resultSchema>;
 const invalidResultMessage = 'AI 返回的调整格式无效，请重新生成';
@@ -19,11 +21,14 @@ export function parseNovelResult(output: string) {
   try { return resultSchema.parse(parseJSON(output)); }
   catch { throw new Error(invalidResultMessage); }
 }
-export const hasNovelChanges = (result: NovelResult) => !!Object.keys(result.project ?? {}).length || !!result.notes.length || !!result.removeNoteIds.length || !!result.chapters.length;
+export const hasNovelChanges = (result: NovelResult) => !!Object.keys(result.project ?? {}).length || !!result.notes.length || !!result.removeNoteIds.length || !!result.chapters.length || !!result.removeChapterIds.length;
 export const novelFields = { title: '书名', genre: '题材', form: '形式', targetWords: '目标字数', theme: '主题', audience: '读者定位', synopsis: '简介', outline: '故事总纲' } as const;
 
 function editableContent(project: Project) {
   return { ...Object.fromEntries(Object.keys(novelFields).map(key => [key, project[key as keyof typeof novelFields]])), notes: project.notes.filter(note => editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])).map(({ graphPosition: _, ...note }) => note), chapters: project.chapters.map(({ id, title, plan }) => ({ id, title, plan })) };
+}
+function canRemoveChapter(project: Project, chapter: Chapter) {
+  return !chapter.content.trim() && !chapter.summary.trim() && !chapter.versions.length && !chapter.memoryHash && !project.notes.some(note => note.chapterId === chapter.id && !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number]));
 }
 export function novelSnapshot(project: Project) {
   return contentHash(JSON.stringify({ ...editableContent(project), references: project.referenceIds, skills: project.skillIds, continuity: project.notes.filter(note => !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])), manuscripts: project.chapters.map(({ id, content, summary }) => ({ id, content: contentHash(content), summary })) }));
@@ -49,7 +54,7 @@ export function novelContext(state: Workspace, job: Job) {
   if (!project || !job.novelChat) throw new Error('小说已移除');
   const history = job.novelChat.previousJobIds.map(id => state.jobs.find(value => value.id === id && value.projectId === project.id && value.novelChat)).filter((value): value is Job => !!value);
   const latestProposal = [...history].reverse().find(value => value.status === 'ready');
-  return '\n当前小说：\n' + JSON.stringify({ ...editableContent(project), continuity: project.notes.filter(note => !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])), manuscripts: project.chapters.map(chapter => ({ id: chapter.id, summary: chapter.summary, contentHash: contentHash(chapter.content), excerpt: chapter.content.slice(0, 1200) + (chapter.content.length > 2400 ? '\n[正文中段省略]\n' : '') + chapter.content.slice(Math.max(1200, chapter.content.length - 1200)), excerpted: chapter.content.length > 2400 })) })
+  return '\n当前小说：\n' + JSON.stringify({ ...editableContent(project), removableChapterIds: project.chapters.filter(chapter => canRemoveChapter(project, chapter)).map(chapter => chapter.id), continuity: project.notes.filter(note => !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])), manuscripts: project.chapters.map(chapter => ({ id: chapter.id, summary: chapter.summary, contentHash: contentHash(chapter.content), excerpt: chapter.content.slice(0, 1200) + (chapter.content.length > 2400 ? '\n[正文中段省略]\n' : '') + chapter.content.slice(Math.max(1200, chapter.content.length - 1200)), excerpted: chapter.content.length > 2400 })) })
     + '\n此前对话（当前小说为已采用内容，完整保留最近的待采用方案，其余为历史摘要）：\n' + JSON.stringify(history.map(value => ({ author: value === latestProposal ? value.instruction : value.instruction.slice(0, 800), authorExcerpted: value !== latestProposal && value.instruction.length > 800, response: value === latestProposal ? value.steps[0].output : parseNovelResult(value.steps[0].output).reply, adopted: value.status === 'accepted' && !value.novelChat?.undone, undone: !!value.novelChat?.undone })))
     + '\n选用参考资料：\n' + JSON.stringify(state.references.filter(reference => project.referenceIds.includes(reference.id)).map(({ title, content }) => ({ title, content })));
 }
@@ -58,13 +63,18 @@ export function novelContext(state: Workspace, job: Job) {
 export function applyNovelResult(project: Project, result: NovelResult): Project {
   const next = structuredClone(project);
   const seen = new Set<string>();
-  for (const id of [...result.notes.flatMap(note => note.id ? [note.id] : []), ...result.removeNoteIds, ...result.chapters.flatMap(chapter => chapter.id ? [chapter.id] : [])]) {
+  for (const id of [...result.notes.flatMap(note => note.id ? [note.id] : []), ...result.removeNoteIds, ...result.chapters.flatMap(chapter => chapter.id ? [chapter.id] : []), ...result.removeChapterIds]) {
     if (seen.has(id)) throw new Error('调整结果包含重复记录');
     seen.add(id);
   }
   for (const id of result.removeNoteIds) {
     const note = next.notes.find(value => value.id === id);
     if (!note || !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])) throw new Error('不能移除该记录');
+  }
+  for (const id of result.removeChapterIds) {
+    const chapter = next.chapters.find(value => value.id === id);
+    if (!chapter) throw new Error('章节已移除，请重新调整');
+    if (!canRemoveChapter(next, chapter)) throw new Error(`章节「${chapter.title}」已有正文、历史版本或关联记录，请仅清空计划`);
   }
   // Pin legacy name-based links before renaming characters.
   const originalCharacters = next.notes.filter(note => note.kind === 'character');
@@ -104,6 +114,8 @@ export function applyNovelResult(project: Project, result: NovelResult): Project
     chapter.updatedAt = now();
     if (!patch.id) next.chapters.push(chapter);
   }
+  next.chapters = next.chapters.filter(chapter => !result.removeChapterIds.includes(chapter.id));
+  for (const note of next.notes) if (result.removeChapterIds.includes(note.chapterId)) note.chapterId = '';
   next.updatedAt = now();
   return next;
 }
@@ -114,8 +126,9 @@ export function acceptNovel(state: Workspace, job: Job) {
   if (novelSnapshot(project) !== job.novelChat.base) throw new Error('小说内容已更新，请重新调整');
   const result = parseNovelResult(job.steps[0].output);
   if (!hasNovelChanges(result)) throw new Error('暂无可采用的调整');
+  requireIdleChapters(state, project.id, result.removeChapterIds);
   const next = applyNovelResult(project, result);
-  job.novelChat.before = JSON.stringify(editableContent(project));
+  job.novelChat.before = JSON.stringify({ ...editableContent(project), removedChapters: project.chapters.filter(chapter => result.removeChapterIds.includes(chapter.id)) });
   Object.assign(project, next);
   job.novelChat.appliedBase = novelSnapshot(project);
 }
@@ -124,11 +137,19 @@ export function undoNovel(state: Workspace, job: Job) {
   const project = state.projects.find(value => value.id === job.projectId), chat = job.novelChat;
   if (!project || job.status !== 'accepted' || !chat?.before || chat.undone) throw new Error('暂无可撤销的调整');
   if (novelSnapshot(project) !== chat.appliedBase) throw new Error('小说内容已更新，无法撤销此次调整');
-  const saved = JSON.parse(chat.before) as ReturnType<typeof editableContent>;
-  const { notes, chapters, ...fields } = saved;
+  const saved = JSON.parse(chat.before) as ReturnType<typeof editableContent> & { removedChapters?: Chapter[] };
+  const { notes, chapters, removedChapters = [], ...fields } = saved;
+  const addedIds = project.chapters.filter(chapter => !chapters.some(saved => saved.id === chapter.id)).map(chapter => chapter.id);
+  requireIdleChapters(state, project.id, addedIds);
+  if (project.chapters.some(chapter => addedIds.includes(chapter.id) && !canRemoveChapter(project, chapter))) throw new Error('新增章节已有正文或关联记录，无法撤销此次调整');
+  const restoredChapters = chapters.map(chapter => {
+    const original = project.chapters.find(value => value.id === chapter.id) ?? removedChapters.find(value => value.id === chapter.id);
+    if (!original) throw new Error('章节已变更，无法撤销此次调整');
+    return { ...structuredClone(original), ...chapter, updatedAt: now() };
+  });
   const positions = new Map(project.notes.map(note => [note.id, note.graphPosition]));
   project.notes = [...notes.map(note => ({ ...note, graphPosition: positions.get(note.id) })), ...project.notes.filter(note => !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number]))];
-  project.chapters = chapters.map(chapter => ({ ...project.chapters.find(value => value.id === chapter.id)!, ...chapter, updatedAt: now() }));
+  project.chapters = restoredChapters;
   Object.assign(project, fields, { updatedAt: now() });
   chat.undone = true;
 }

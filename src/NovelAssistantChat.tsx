@@ -60,8 +60,8 @@ function NovelReply({ job, project, store, busy, onRegenerate }: { job: Job; pro
     try { return parseNovelResult(step.output); } catch { return; }
   }, [step.output, job.status]);
   const current = novelSnapshot(project);
-  const previousNotes = useMemo(() => {
-    try { return JSON.parse(job.novelChat?.before ?? '{}').notes as Note[] | undefined; } catch { return undefined; }
+  const previous = useMemo(() => {
+    try { return JSON.parse(job.novelChat?.before ?? '{}') as { notes?: Note[]; chapters?: Pick<Project['chapters'][number], 'id' | 'title' | 'plan'>[] }; } catch { return undefined; }
   }, [job.novelChat?.before]);
   const stale = job.novelChat?.base !== current;
   const changes = result && hasNovelChanges(result);
@@ -70,13 +70,14 @@ function NovelReply({ job, project, store, busy, onRegenerate }: { job: Job; pro
     ...fields.map(([key, value]) => ({ id: key, title: novelFields[key as keyof typeof novelFields], body: key === 'form' ? value === 'long' ? '长篇' : '短篇' : String(value) })),
     ...result.notes.map((note, index) => ({ id: `note-${index}`, title: `${note.id ? '更新' : '新增'}${noteNames[note.kind]} · ${note.title}`, body: `${note.source && note.target ? `${note.source} · ${note.target}\n\n` : ''}${note.body}` })),
     ...result.chapters.map((chapter, index) => ({ id: `chapter-${index}`, title: `${chapter.id && !chapter.plan ? '清空章节计划' : `${chapter.id ? '更新' : '新增'}章节`} · ${chapter.title ?? project.chapters.find(value => value.id === chapter.id)?.title ?? '章节计划'}`, body: chapter.plan })),
-    ...result.removeNoteIds.map(id => { const note = previousNotes?.find(note => note.id === id) ?? project.notes.find(note => note.id === id); return { id: `remove-${id}`, title: `移除 · ${note?.title ?? '旧设定'}`, body: note?.body ?? '旧设定已移除' }; }),
+    ...result.removeNoteIds.map(id => { const note = previous?.notes?.find(note => note.id === id) ?? project.notes.find(note => note.id === id); return { id: `remove-${id}`, title: `移除 · ${note?.title ?? '旧设定'}`, body: note?.body ?? '旧设定已移除' }; }),
+    ...result.removeChapterIds.map(id => { const chapter = previous?.chapters?.find(chapter => chapter.id === id) ?? project.chapters.find(chapter => chapter.id === id); return { id: `remove-chapter-${id}`, title: `移除章节 · ${chapter?.title ?? '旧章节'}`, body: chapter?.plan ?? '' }; }),
   ] : [];
   return <Paper p="md" shadow="none"><Stack gap="md">
     <Group justify="space-between"><Text size="sm" fw={500}>小说 AI</Text>{job.status === 'accepted' && changes && <Badge color={job.novelChat?.undone ? 'gray' : 'green'}>{job.novelChat?.undone ? '已撤销' : '已采用'}</Badge>}</Group>
     {pending ? <Center mih={100} role="status"><Group gap="sm"><Loader size="sm" /><Text size="sm">{job.status === 'queued' ? '等待回复' : '正在调整小说'}</Text></Group></Center> : result ? <>
       <Markdown onError={store.notify}>{result.reply}</Markdown>
-      {changes && <><Group gap="xs">{fields.length > 0 && <Badge>小说信息 {fields.length}</Badge>}{[...new Set(result.notes.map(note => note.kind))].map(kind => <Badge key={kind}>{noteNames[kind]} {result.notes.filter(note => note.kind === kind).length}</Badge>)}{result.chapters.length > 0 && <Badge>章节 {result.chapters.length}</Badge>}{result.removeNoteIds.length > 0 && <Badge color="red">移除 {result.removeNoteIds.length}</Badge>}</Group><Accordion variant="separated">{preview.map(item => <Accordion.Item key={item.id} value={item.id}><Accordion.Control>{item.title}</Accordion.Control><Accordion.Panel>{item.body ? <Markdown onError={store.notify}>{item.body}</Markdown> : <EmptyState minHeight={100}>暂无章节计划</EmptyState>}</Accordion.Panel></Accordion.Item>)}</Accordion></>}
+      {changes && <><Group gap="xs">{fields.length > 0 && <Badge>小说信息 {fields.length}</Badge>}{[...new Set(result.notes.map(note => note.kind))].map(kind => <Badge key={kind}>{noteNames[kind]} {result.notes.filter(note => note.kind === kind).length}</Badge>)}{result.chapters.length > 0 && <Badge>章节 {result.chapters.length}</Badge>}{result.removeNoteIds.length > 0 && <Badge color="red">移除设定 {result.removeNoteIds.length}</Badge>}{result.removeChapterIds.length > 0 && <Badge color="red">移除章节 {result.removeChapterIds.length}</Badge>}</Group><Accordion variant="separated">{preview.map(item => <Accordion.Item key={item.id} value={item.id}><Accordion.Control>{item.title}</Accordion.Control><Accordion.Panel>{item.body ? <Markdown onError={store.notify}>{item.body}</Markdown> : <EmptyState minHeight={100}>暂无章节计划</EmptyState>}</Accordion.Panel></Accordion.Item>)}</Accordion></>}
       {changes && job.status !== 'accepted' && <Group justify="flex-end">{stale && <Text size="sm" c="dimmed">小说内容已更新</Text>}<Button disabled={busy} onClick={onRegenerate}>重新调整</Button><Button primary disabled={busy || stale} onClick={() => store.accept(job.id, step.id)}>采用全部调整</Button></Group>}
       {job.status === 'accepted' && job.novelChat?.before && !job.novelChat.undone && <Group justify="flex-end"><Button disabled={busy || current !== job.novelChat.appliedBase} onClick={() => store.undoNovelAdjustment(job.id)}>撤销此次调整</Button></Group>}
     </> : <Alert color={job.status === 'failed' ? 'red' : 'gray'} title={job.status === 'failed' ? '调整失败' : '回复已停止'}>{job.error && <Text size="sm">{job.error}</Text>}</Alert>}
