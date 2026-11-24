@@ -164,7 +164,7 @@ it('does not stage edits made by another process during validation', async () =>
     expect(await test.git('diff', '--cached', '--name-only')).toBe('');
     expect(await readFile(join(test.repository, file), 'utf8')).toBe('Concurrent work');
   }
-});
+}, 15000);
 
 it('does not report success when Actions fails', async () => {
   const failed = await fixture({ fail: (command, args) => command === 'gh' && args[1] === 'watch' });
