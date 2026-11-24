@@ -17,6 +17,20 @@ function setup() {
 }
 
 describe('writing chat entry and results', () => {
+  it('keeps earlier requests and outputs visible after a task in another chapter is sent', () => {
+    const { project, job, store } = setup();
+    job.status = 'ready'; job.steps.forEach(step => { step.status = 'ready'; step.output = '第一轮生成内容'; });
+    const next = createJob(project, 'continue', null, [project.chapters[1].id], '第二轮创作要求');
+    store.state.jobs.unshift(next);
+    const html = renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} onSettings={vi.fn()} /></MantineProvider>);
+    expect(html).toContain('最近一次创作要求');
+    expect(html).toContain('第二轮创作要求');
+    expect(html.indexOf('最近一次创作要求')).toBeLessThan(html.indexOf('第二轮创作要求'));
+    expect(html).toContain('生成正文 · 第一章');
+    expect(html).toContain('查看生成稿');
+    expect(html.match(/aria-label="创作任务聊天记录"/g)).toHaveLength(1);
+  });
+
   it('opens the most recent task conversation even when it belongs to an earlier chapter', () => {
     const { project, store } = setup();
     const html = renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} onSettings={vi.fn()} /></MantineProvider>);

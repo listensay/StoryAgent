@@ -27,6 +27,7 @@ export const novelFields = { title: '书名', genre: '题材', form: '形式', t
 function editableContent(project: Project) {
   return { ...Object.fromEntries(Object.keys(novelFields).map(key => [key, project[key as keyof typeof novelFields]])), notes: project.notes.filter(note => editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number])).map(({ graphPosition: _, ...note }) => note), chapters: project.chapters.map(({ id, title, plan }) => ({ id, title, plan })) };
 }
+export const novelBefore = (project: Project) => JSON.stringify(editableContent(project));
 function canRemoveChapter(project: Project, chapter: Chapter) {
   return !chapter.content.trim() && !chapter.summary.trim() && !chapter.versions.length && !chapter.memoryHash && !project.notes.some(note => note.chapterId === chapter.id && !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number]));
 }

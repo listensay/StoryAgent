@@ -17,7 +17,7 @@ import { runArticleCollection, runCollection } from './collectionTask';
 import { createCreationRound, creationContextKey, finishCreationRound, newCreationDraft, parseCreationOptions, projectFromCreation, selectCreationOption, selectedCreationOption, setCreationDirection } from './novelCreation';
 import { type CreationStage } from './novelCreationData';
 import { acceptPlanning, hasPlanningChanges, parsePlanningResult, planningSnapshot } from './planning';
-import { acceptNovel, applyNovelResult, hasNovelChanges, novelSnapshot, parseNovelResult, recoverNovelJobs, undoNovel } from './novelAssistant';
+import { acceptNovel, applyNovelResult, hasNovelChanges, novelBefore, novelSnapshot, parseNovelResult, recoverNovelJobs, undoNovel } from './novelAssistant';
 export { parseMemory } from './jobWorkflow';
 
 type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; targetWords?: number; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training']; planningChat?: boolean; skillTarget?: Job['skillTarget'] };
@@ -216,7 +216,7 @@ export function useWorkspace() {
     if (job.kind === 'revise' && project) {
       if (options.chapterIds?.length) throw new Error('小说 AI 按整本小说调整');
       if (current.jobs.some(value => value.projectId === project.id && value.novelChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
-      job.novelChat = { base: novelSnapshot(project), previousJobIds: current.jobs.filter(value => value.projectId === project.id && value.novelChat && ['ready', 'accepted'].includes(value.status)).slice(0, 6).reverse().map(value => value.id) };
+      job.novelChat = { base: novelSnapshot(project), before: novelBefore(project), previousJobIds: current.jobs.filter(value => value.projectId === project.id && value.novelChat && ['ready', 'accepted'].includes(value.status)).slice(0, 6).reverse().map(value => value.id) };
       buildPrompt(current, job, job.steps[0], config);
     }
     if (job.kind === 'train') {
@@ -402,6 +402,7 @@ export function useWorkspace() {
           const project = s.projects.find(value => value.id === item.projectId);
           if (!project) throw new Error('小说已移除');
           item.novelChat.base = novelSnapshot(project);
+          item.novelChat.before = novelBefore(project);
           item.steps.forEach(step => { step.output = ''; });
         }
         if (item.planningChat) {

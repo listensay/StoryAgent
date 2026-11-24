@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Accordion, Anchor, Group, Loader, Paper, ScrollArea, Stack, Text } from '@mantine/core';
 import { type Job, type JobStep, type Project, taskNames, wordCount } from './domain';
 import { type Store } from './useWorkspace';
@@ -9,33 +9,45 @@ import { Markdown } from './Markdown';
 import { useAIScroll } from './useAIScroll';
 import { writingCompleted, writingSkillFiles, writingStageName } from './writingActivity';
 
-export function WritingChat({ job, project, store, onResult }: { job?: Job; project: Project; store: Store; onResult: (chapterId: string) => void }) {
-  const { contentRef, scrollToBottom } = useAIScroll();
-  const [aiOpen, setAIOpen] = useState(false);
-  const generating = !!job && ['queued', 'running'].includes(job.status);
-  useEffect(() => { if (job) scrollToBottom(); }, [job?.id, generating, scrollToBottom]);
-  const steps = job?.steps.filter(step => step.execution || step.reasoning || step.output || step.status !== 'pending') ?? [];
-  const completed = !!job && writingCompleted(job);
-  const results = job?.steps.filter(step => !step.intermediate && step.output && project.chapters.some(chapter => chapter.id === step.chapterId)) ?? [];
-  if (!job) return <EmptyState>暂无创作任务</EmptyState>;
+export function WritingChat({ job, history, project, store, onResult }: { job?: Job; history?: Job[]; project: Project; store: Store; onResult: (chapterId: string, jobId?: string) => void }) {
+  const entries = history ?? (job ? [job] : []);
+  const taskRefs = useRef(new Map<string, HTMLDivElement>());
+  const generating = entries.some(entry => ['queued', 'running'].includes(entry.status));
+  const { contentRef, scrollToBottom } = useAIScroll(generating);
+  useEffect(() => {
+    if (!job || job.id === entries[0]?.id) scrollToBottom();
+    else taskRefs.current.get(job.id)?.scrollIntoView({ block: 'start' });
+  }, [job?.id, entries.length, generating, scrollToBottom]);
+  if (!entries.length) return <EmptyState>暂无创作任务</EmptyState>;
   return <Stack gap={0} className="writing-chat">
     <ScrollArea type="auto" className="writing-chat-scroll" viewportProps={{ role: 'region', 'aria-label': '创作任务聊天记录', tabIndex: 0 }}>
       <Stack ref={contentRef} className="writing-chat-content" gap="xl" role="log" aria-label="创作任务执行记录" aria-live="off">
-          <Stack gap={8} align="flex-end">
-            <Paper className="writing-chat-request" p="md" radius="lg" shadow="none" withBorder={false} maw="92%">
-              <Stack gap="xs"><Text size="sm" fw={600}>{taskNames[job.kind]} · {job.steps.filter(step => !step.intermediate).map(step => project.chapters.find(chapter => chapter.id === step.chapterId)?.title ?? step.title).join('、')}{job.targetWords ? ` · ${job.targetWords.toLocaleString()} 字` : ''}</Text>{job.instruction && <Text size="sm" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{job.instruction}</Text>}</Stack>
-            </Paper>
-            <Text size="xs" c="dimmed">{new Date(job.createdAt).toLocaleString('zh-CN')} · {job.ai?.model ?? 'AI 未设置'}</Text>
-          </Stack>
-          <Stack gap="md">
-            {steps.map(step => <StepActivity key={step.id} job={job} step={step} store={store} />)}
-            {generating && <Group gap="sm" px="xs" role="status"><Loader size={16} /><Text size="sm" c="dimmed">{steps.length ? '创作任务进行中' : job.status === 'queued' ? '任务排队中' : '正在读取任务资料'}</Text></Group>}
-          </Stack>
-          {completed && <Stack gap="xs" px="xs" role="status"><Group gap="sm"><Check size={19} color="var(--mantine-color-teal-7)" /><Text size="sm" fw={500}>创作任务已完成</Text></Group><Group gap="md" pl={27}>{results.map(step => <Anchor component="button" key={step.id} size="sm" onClick={() => onResult(step.chapterId)}>{results.length === 1 ? '查看生成稿' : `查看${project.chapters.find(chapter => chapter.id === step.chapterId)?.title}生成稿`}</Anchor>)}</Group></Stack>}
-          {['paused', 'failed'].includes(job.status) && <Text size="sm" c={job.status === 'failed' ? 'red.8' : 'dimmed'} role="status">{job.status === 'failed' ? '创作任务失败' : '创作任务已停止'}</Text>}
-          {job.error && <Text size="sm" c="red.8" role="alert">{job.error}</Text>}
+        {[...entries].reverse().map(entry => <Stack key={entry.id} ref={element => { if (element) taskRefs.current.set(entry.id, element); else taskRefs.current.delete(entry.id); }} gap="xl"><WritingConversation job={entry} project={project} store={store} onResult={onResult} /></Stack>)}
       </Stack>
     </ScrollArea>
+  </Stack>;
+}
+
+function WritingConversation({ job, project, store, onResult }: { job: Job; project: Project; store: Store; onResult: (chapterId: string, jobId?: string) => void }) {
+  const [aiOpen, setAIOpen] = useState(false);
+  const generating = ['queued', 'running'].includes(job.status);
+  const steps = job.steps.filter(step => step.execution || step.reasoning || step.output || step.status !== 'pending');
+  const completed = writingCompleted(job);
+  const results = job.steps.filter(step => !step.intermediate && step.output && project.chapters.some(chapter => chapter.id === step.chapterId));
+  return <Stack gap="xl">
+    <Stack gap={8} align="flex-end">
+      <Paper className="writing-chat-request" p="md" radius="lg" shadow="none" withBorder={false} maw="92%">
+        <Stack gap="xs"><Text size="sm" fw={600}>{taskNames[job.kind]} · {job.steps.filter(step => !step.intermediate).map(step => project.chapters.find(chapter => chapter.id === step.chapterId)?.title ?? step.title).join('、')}{job.targetWords ? ` · ${job.targetWords.toLocaleString()} 字` : ''}</Text>{job.instruction && <Text size="sm" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{job.instruction}</Text>}</Stack>
+      </Paper>
+      <Text size="xs" c="dimmed">{new Date(job.createdAt).toLocaleString('zh-CN')} · {job.ai?.model ?? 'AI 未设置'}</Text>
+    </Stack>
+    <Stack gap="md">
+      {steps.map(step => <StepActivity key={step.id} job={job} step={step} store={store} />)}
+      {generating && <Group gap="sm" px="xs" role="status"><Loader size={16} /><Text size="sm" c="dimmed">{steps.length ? '创作任务进行中' : job.status === 'queued' ? '任务排队中' : '正在读取任务资料'}</Text></Group>}
+    </Stack>
+    {completed && <Stack gap="xs" px="xs" role="status"><Group gap="sm"><Check size={19} color="var(--mantine-color-teal-7)" /><Text size="sm" fw={500}>创作任务已完成</Text></Group><Group gap="md" pl={27}>{results.map(step => <Anchor component="button" key={step.id} size="sm" onClick={() => onResult(step.chapterId, job.id)}>{results.length === 1 ? '查看生成稿' : `查看${project.chapters.find(chapter => chapter.id === step.chapterId)?.title}生成稿`}</Anchor>)}</Group></Stack>}
+    {['paused', 'failed'].includes(job.status) && <Text size="sm" c={job.status === 'failed' ? 'red.8' : 'dimmed'} role="status">{job.status === 'failed' ? '创作任务失败' : '创作任务已停止'}</Text>}
+    {job.error && <Text size="sm" c="red.8" role="alert">{job.error}</Text>}
     <Group justify="flex-end" gap="xs" px="lg" py="sm" className="writing-chat-controls">
       {generating ? <Button icon={Pause} onClick={() => store.stop(job.id)}>停止</Button> : <>
         {['paused', 'failed'].includes(job.status) && <><IconButton icon={Settings2} label="任务 AI 设置" onClick={() => setAIOpen(true)} /><Button icon={Play} onClick={() => store.resumeJob(job.id)}>继续生成</Button><Button icon={RefreshCw} onClick={() => store.resumeJob(job.id, true)}>重试当前步骤</Button></>}

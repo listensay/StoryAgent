@@ -2,6 +2,7 @@ import { cloneElement, isValidElement, useEffect, useId, useState, type ReactNod
 import { ActionIcon, Box, Button as MantineButton, Input, Modal as MantineModal, ScrollArea, Select as MantineSelect, Stack, Group, ThemeIcon, Title, Paper, Tabs, Tooltip, Text } from '@mantine/core';
 import { X, Plus, ChevronDown, type AppIcon } from './icons';
 import { Markdown } from './Markdown';
+import { textDiff } from './textDiff';
 
 export { TextInput, Textarea, NumberInput, Checkbox, Switch, Fieldset, UnstyledButton, Title, Badge, Paper, Autocomplete } from '@mantine/core';
 
@@ -49,6 +50,7 @@ export function Select({ label, value, onChange, options, className, placeholder
 export function OptionTabs({ value, onChange, options, label }: { value: string; onChange: (value: string) => void; options: { value: string; label: string }[]; label: string }) {
   return <Tabs value={value} onChange={v => { if (v !== null) onChange(v); }}><Tabs.List aria-label={label}>{options.map(o => <Tabs.Tab value={o.value} key={o.value}>{o.label}</Tabs.Tab>)}</Tabs.List></Tabs>;
 }
-export function Diff({ left, right, leftTitle = '当前正文', rightTitle = '生成结果', onError }: { left: string; right: string; leftTitle?: string; rightTitle?: string; onError: (message: string) => void }) {
-  return <div className="diff">{[[leftTitle, left], [rightTitle, right]].map(([title, text], index) => <Paper key={index} shadow="none" p="md" className="diff-column"><Title order={3} mb="md" style={{ flexShrink: 0 }}>{title}</Title>{text.trim() ? <ScrollArea type="always" scrollbars="y" offsetScrollbars className="diff-scroll" viewportProps={{ tabIndex: 0, role: 'region', 'aria-label': `${title}内容` }}><Box pr="sm"><Markdown size="md" onError={onError}>{text}</Markdown></Box></ScrollArea> : <EmptyState>暂无内容</EmptyState>}</Paper>)}</div>;
+export function Diff({ left, right, leftTitle = '当前正文', rightTitle = '生成结果', highlightChanges = false, leftAvailable = true, onError }: { left: string; right: string; leftTitle?: string; rightTitle?: string; highlightChanges?: boolean; leftAvailable?: boolean; onError: (message: string) => void }) {
+  const lines = highlightChanges ? textDiff(left, right) : undefined;
+  return <div className="diff">{[[leftTitle, left], [rightTitle, right]].map(([title, text], index) => <Paper key={index} shadow="none" p="md" className="diff-column"><Title order={3} mb="md" style={{ flexShrink: 0 }}>{title}</Title>{index === 0 && !leftAvailable ? <EmptyState>原内容不可用</EmptyState> : text.trim() ? <ScrollArea type="always" scrollbars="y" offsetScrollbars className="diff-scroll" viewportProps={{ tabIndex: 0, role: 'region', 'aria-label': `${title}内容` }}><Box pr="sm">{lines ? lines[index].map((line, number) => <Text component="div" key={number} size="sm" lh={1.8} px="xs" bg={line.changed ? index === 0 ? 'red.0' : 'teal.0' : undefined} c={line.changed ? index === 0 ? 'red.9' : 'teal.9' : undefined} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', minHeight: '1.8em' }}>{line.changed && <Text component="span" inherit mr="xs" aria-label={index === 0 ? '删除' : '新增'}>{index === 0 ? '−' : '+'}</Text>}{line.text}</Text>) : <Markdown size="md" onError={onError}>{text}</Markdown>}</Box></ScrollArea> : <EmptyState>暂无内容</EmptyState>}</Paper>)}</div>;
 }

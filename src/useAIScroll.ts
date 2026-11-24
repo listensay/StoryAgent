@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useState } from 'react';
 
-export function useAIScroll() {
+export function useAIScroll(follow = true) {
   const [content, setContent] = useState<HTMLElement | null>(null);
   const [request, setRequest] = useState(0);
   const scrollToBottom = useCallback(() => setRequest(value => value + 1), []);
@@ -18,6 +18,8 @@ export function useAIScroll() {
       height = scroller.scrollHeight;
       scroller.scrollTo({ top: height, behavior: 'instant' });
     };
+    scroll();
+    if (!follow) return;
     const schedule = () => {
       if (!following || frame) return;
       frame = requestAnimationFrame(() => { frame = 0; if (following) scroll(); });
@@ -33,7 +35,6 @@ export function useAIScroll() {
     resize.observe(content);
     resize.observe(scroller);
     scroller.addEventListener('scroll', onScroll, { passive: true });
-    scroll();
     schedule();
     return () => {
       cancelAnimationFrame(frame);
@@ -41,7 +42,7 @@ export function useAIScroll() {
       resize.disconnect();
       scroller.removeEventListener('scroll', onScroll);
     };
-  }, [content, request]);
+  }, [content, request, follow]);
 
   return { contentRef: setContent, scrollToBottom };
 }
