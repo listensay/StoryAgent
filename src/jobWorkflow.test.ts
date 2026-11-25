@@ -151,12 +151,13 @@ describe('创作准备与自动写作流程', () => {
     expect(canAcceptWritingStep(job, job.steps[0])).toBe(false);
   });
 });
-describe('自动记忆和旧数据', () => {
-  it('去重未完成任务，恢复旧正文后可以再次维护', () => {
+describe('手动保存记忆和旧数据', () => {
+  it('去重正在执行的任务，失败、停止或正文更新后可以再次提取', () => {
     const { state, project, chapter } = setup(); state.jobs = [];
     expect(needsMemory(state, project, chapter)).toBe(true);
     const job = createJob(project, 'memory', ai, [chapter.id], ''); state.jobs = [job];
-    for (const status of ['queued', 'running', 'failed', 'paused'] as const) { job.status = status; expect(needsMemory(state, project, chapter)).toBe(false); }
+    for (const status of ['queued', 'running', 'ready'] as const) { job.status = status; expect(needsMemory(state, project, chapter)).toBe(false); }
+    for (const status of ['failed', 'paused'] as const) { job.status = status; expect(needsMemory(state, project, chapter)).toBe(true); }
     job.status = 'accepted'; expect(needsMemory(state, project, chapter)).toBe(true);
     chapter.memoryHash = contentHash(chapter.content); expect(needsMemory(state, project, chapter)).toBe(false);
     chapter.content += '更新'; expect(needsMemory(state, project, chapter)).toBe(true);

@@ -12,7 +12,7 @@ export function contentHash(text: string) {
 }
 export function needsMemory(state: Workspace, project: Project, chapter: Project['chapters'][number]) {
   return !!chapter.content.trim() && chapter.memoryHash !== contentHash(chapter.content) && !state.jobs.some(j => j.projectId === project.id && (
-    (j.kind === 'memory' && j.status !== 'accepted' && j.steps.some(p => p.chapterId === chapter.id && p.baseContent === chapter.content)) ||
+    (j.kind === 'memory' && ['queued', 'running', 'ready'].includes(j.status) && j.steps.some(p => p.chapterId === chapter.id && p.baseContent === chapter.content)) ||
     (['draft', 'continue', 'rewrite'].includes(j.kind) && ['queued', 'running'].includes(j.status) && j.steps.some(p => p.chapterId === chapter.id))
   ));
 }

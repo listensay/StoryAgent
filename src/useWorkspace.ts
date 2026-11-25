@@ -30,6 +30,7 @@ export function useWorkspace() {
   const [message, setMessage] = useState('');
   const [messageId, setMessageId] = useState(0);
   const controllers = useRef(new Map<string, AbortController>());
+  const savingChapters = useRef(new Set<string>());
   const [requests] = useState(() => new AIRequestQueue(id => stateRef.current.providers.find(p => p.id === id)?.concurrency ?? 2));
   const generation = useRef(0);
   const [queueTick, setQueueTick] = useState(0);
@@ -249,6 +250,27 @@ export function useWorkspace() {
       s.jobs.unshift(job);
     }); notify('任务已添加'); return job.id;
   }, [notify, update]);
+  const saveChapter = useCallback(async (projectId: string, chapterId: string) => {
+    const key = `${projectId}:${chapterId}`;
+    if (savingChapters.current.has(key)) return;
+    const current = stateRef.current;
+    const chapter = current.projects.find(project => project.id === projectId)?.chapters.find(chapter => chapter.id === chapterId);
+    if (!chapter) { notify('章节已移除'); return; }
+    if (restarting.current) { notify('正在更新软件'); return; }
+    savingChapters.current.add(key);
+    setSaveStatus('保存中');
+    try {
+      await saveWorkspace(current);
+      if (stateRef.current === current) setSaveStatus('已保存');
+      const latest = stateRef.current;
+      const project = latest.projects.find(project => project.id === projectId);
+      const savedChapter = project?.chapters.find(chapter => chapter.id === chapterId);
+      if (!project || !savedChapter || savedChapter.content !== chapter.content || !needsMemory(latest, project, savedChapter)) { notify('已保存'); return; }
+      try { launch({ kind: 'memory', projectId, chapterIds: [chapterId] }); }
+      catch (error) { notify(`正文已保存，记忆提取失败：${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { setSaveStatus('保存失败'); notify(`保存失败：${error instanceof Error ? error.message : String(error)}`); }
+    finally { savingChapters.current.delete(key); }
+  }, [launch, notify]);
   const reextractSkill = useCallback((id: string) => {
     try {
       const current = stateRef.current;
@@ -318,19 +340,6 @@ export function useWorkspace() {
     });
     return project.id;
   }, [update]);
-  const memoryKey = JSON.stringify([state.aiSelection, state.providers.map(p => [p.id, p.enabled, p.models]), state.projects.map(p => [p.id, p.chapters.map(c => [c.id, contentHash(c.content), c.memoryHash])]), state.jobs.filter(j => ['draft', 'continue', 'rewrite'].includes(j.kind) && ['running', 'queued'].includes(j.status)).map(j => j.id)]);
-  useEffect(() => {
-    if (!loaded) return;
-    const timer = setTimeout(() => {
-      const current = stateRef.current;
-      try { resolveAI(current.aiSelection, current.providers); } catch { return; }
-      for (const project of current.projects) {
-        const ids = project.chapters.filter(chapter => needsMemory(stateRef.current, project, chapter)).map(c => c.id);
-        if (ids.length && !restarting.current) launch({ kind: 'memory', projectId: project.id, chapterIds: ids });
-      }
-    }, 10000);
-    return () => clearTimeout(timer);
-  }, [memoryKey, loaded, launch]);
   useEffect(() => {
     if (!loaded || restarting.current) return;
     for (const id of runnableJobs(stateRef.current.jobs, stateRef.current.providers, new Set(controllers.current.keys()))) void runJob(id);
@@ -495,7 +504,7 @@ export function useWorkspace() {
     return true;
   }, [canUpdate]);
   const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, saveChapter, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };
