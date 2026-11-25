@@ -1,6 +1,6 @@
 import { Drawer, Group, Select as MantineSelect, NavLink, ScrollArea, Stack, Text } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, BookOpen, Copy, History, List, Plus, Save, Settings2, Sparkles, Trash2, X } from '../icons';
 import { type Project, type TaskKind, type Chapter, editChapter, newChapter, now, snapshot, taskNames, uid, wordCount } from '../domain';
 import { NumberInput, TextInput, Textarea, UnstyledButton, Title, Button, Confirm, Diff, Empty, EmptyState, IconButton, ModalPresence, Modal, Select, Badge, Field, OptionTabs } from '../components';
@@ -9,6 +9,8 @@ import { WritingResult, writingStatuses } from '../WritingResult';
 import { AIControls, AITaskModal } from '../AIControls';
 import { WritingChat } from '../WritingChat';
 import { ChapterList } from '../ChapterList';
+import { ContentEditor } from '../ContentEditor';
+import { selectionPolishTask, type PolishSelection } from '../selectionPolish';
 import { moveChapter, removeChapter } from '../chapterOperations';
 
 export function Writing({ project, store, onSettings, focusChapterId, focusJobId }: { project: Project; store: Store; onSettings: () => void; focusChapterId?: string; focusJobId?: string }) {
@@ -33,7 +35,6 @@ export function Writing({ project, store, onSettings, focusChapterId, focusJobId
   const [version, setVersion] = useState<Chapter['versions'][number]>();
   const [restore, setRestore] = useState(false);
   const [saving, setSaving] = useState(false);
-  const editor = useRef<HTMLTextAreaElement>(null);
   const chapter = project.chapters.find(c => c.id === chapterId) ?? project.chapters[project.chapters.length - 1];
   const chapterIndex = project.chapters.findIndex(c => c.id === chapter?.id);
   const chapterToDelete = project.chapters.find(c => c.id === deleteChapterId);
@@ -53,6 +54,16 @@ export function Writing({ project, store, onSettings, focusChapterId, focusJobId
       setAgent(false); setQuickTask(undefined); setInstruction('');
     } catch (e) { store.notify(e instanceof Error ? e.message : String(e)); if (!store.state.providers.some(p => p.enabled && p.models.length)) onSettings(); }
   };
+  const polish = (selected: PolishSelection) => {
+    try {
+      const current = store.stateRef.current.projects.find(p => p.id === project.id)?.chapters.find(c => c.id === chapter?.id);
+      const id = store.launch(selectionPolishTask(project.id, current, selected));
+      setSelectedJobId(id); setTab('result'); setSelection({ start: 0, end: 0 });
+    } catch (error) {
+      store.notify(error instanceof Error ? error.message : String(error));
+      if (!store.state.providers.some(p => p.enabled && p.models.length)) onSettings();
+    }
+  };
   const move = (id: string, index: number) => {
     try { store.update(s => { moveChapter(s.projects.find(p => p.id === project.id)!, id, index); }); }
     catch (error) { store.notify(error instanceof Error ? error.message : String(error)); }
@@ -66,7 +77,7 @@ export function Writing({ project, store, onSettings, focusChapterId, focusJobId
     <Drawer opened={!wideLayout && chaptersOpen} onClose={() => setChaptersOpen(false)} title="章节" size={320} padding="lg" closeButtonProps={{ 'aria-label': '关闭章节', icon: <X size={20} /> }} styles={{ content: { display: 'flex', flexDirection: 'column' }, body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }}><Stack gap="lg" style={{ flex: 1, minHeight: 0 }}><Group justify="space-between"><Text size="sm" c="dimmed">{project.chapters.length} 章</Text><Button icon={Plus} onClick={add}>添加章节</Button></Group>{chapterItems}</Stack></Drawer>
     <section className="editor-section"><div className="editor-toolbar"><div className="row">{!wideLayout && <IconButton icon={List} label="章节列表" onClick={() => setChaptersOpen(true)} />}<OptionTabs label="章节内容" value={tab} onChange={v => setTab(v as typeof tab)} options={[{ value: 'chat', label: '创作任务' }, { value: 'result', label: '生成稿' }, { value: 'content', label: '正文' }, { value: 'plan', label: '细纲' }, { value: 'versions', label: '版本' }]} /></div><Button icon={Settings2} className={agent ? 'soft' : ''} onClick={() => setAgent(!agent)}>任务设置</Button></div>
       {tab === 'chat' ? <><WritingChat job={selectedJob} history={jobs} project={project} store={store} onResult={(id, jobId) => { if (jobId) setSelectedJobId(jobId); setChapterId(id); setTab('result'); }} /><Stack className="writing-chat-composer" gap="sm" px="lg" py="md"><Textarea aria-label="创作要求" placeholder="输入创作要求" autosize minRows={2} maxRows={5} value={instruction} onChange={e => setInstruction(e.target.value)} /><Group justify="space-between" gap="sm"><Group gap="sm"><MantineSelect aria-label="创作任务类型" w={120} allowDeselect={false} rightSection={<ChevronDown size={18} />} value={task} onChange={value => { if (value) setTask(value as TaskKind); }} data={(['draft', 'continue', 'rewrite', 'review', 'plan'] as TaskKind[]).map(kind => ({ value: kind, label: taskNames[kind] }))} /><Text size="sm" c="dimmed">{chapter?.title ?? '新章节'}{['draft', 'continue', 'rewrite'].includes(task) ? ` · ${words.toLocaleString()} 字` : ''}</Text></Group><Button primary icon={Sparkles} onClick={() => launch()}>发送</Button></Group></Stack></> : chapter ? <><div className="chapter-title-row"><TextInput variant="unstyled" aria-label="章节标题" className="chapter-title" styles={{ input: { fontSize: 22, fontWeight: 600 } }} value={chapter.title} onChange={e => patch({ title: e.target.value })} /><div className="row"><IconButton icon={ArrowUp} label="上移章节" disabled={chapterIndex === 0} onClick={() => move(chapter.id, chapterIndex - 1)} /><IconButton icon={ArrowDown} label="下移章节" disabled={chapterIndex === project.chapters.length - 1} onClick={() => move(chapter.id, chapterIndex + 1)} /><IconButton icon={Copy} label="复制章节" onClick={() => { const c = { ...chapter, id: uid(), title: chapter.title + ' · 副本', summary: '', memoryHash: undefined, versions: [], updatedAt: now() }; store.update(s => { s.projects.find(p => p.id === project.id)!.chapters.splice(chapterIndex + 1, 0, c); }); setChapterId(c.id); }} /><IconButton icon={Trash2} label="删除章节" disabled={busyIds.includes(chapter.id)} onClick={() => setDeleteChapterId(chapter.id)} /></div></div>
-        {tab === 'result' ? resultJob ? <WritingResult key={`${resultJob.id}-${chapter.id}`} job={resultJob} chapterId={chapter.id} project={project} store={store} /> : <EmptyState>本章暂无生成结果</EmptyState> : tab !== 'versions' ? <Textarea ref={editor} variant="unstyled" className="novel-editor" styles={{ root: { flex: 1, minHeight: 0 }, wrapper: { height: '100%' }, input: { height: '100%', fontSize: 16, lineHeight: 2, resize: 'none', padding: '16px 28px 28px' } }} aria-label={tab === 'content' ? '章节正文' : '章节细纲'} placeholder={tab === 'content' ? '开始写作' : '本章的事件、场景与人物变化'} value={tab === 'content' ? chapter.content : chapter.plan} onChange={e => patch(tab === 'content' ? { content: e.target.value } : { plan: e.target.value })} onSelect={() => { if (tab === 'content' && editor.current) setSelection({ start: editor.current.selectionStart, end: editor.current.selectionEnd }); }} spellCheck={false} /> : <div className="version-list"><Button icon={Save} onClick={() => { store.update(s => { const p = s.projects.find(p => p.id === project.id)!; p.chapters = p.chapters.map(c => c.id === chapter.id ? snapshot(c, '手动保存') : c); }); store.notify('版本已保存'); }}>保存版本</Button>{chapter.versions.length ? chapter.versions.map(v => <UnstyledButton className="version-row" key={v.id} onClick={() => setVersion(v)}><History size={17} /><span>{v.label}<small>{new Date(v.createdAt).toLocaleString('zh-CN')}</small></span><span className="muted">{wordCount(v.content)} 字</span></UnstyledButton>) : <EmptyState>暂无历史版本</EmptyState>}</div>}
+        {tab === 'result' ? resultJob ? <WritingResult key={`${resultJob.id}-${chapter.id}`} job={resultJob} chapterId={chapter.id} project={project} store={store} /> : <EmptyState>本章暂无生成结果</EmptyState> : tab === 'content' ? <ContentEditor key={chapter.id} value={chapter.content} onChange={content => patch({ content })} onSelectionChange={setSelection} onPolish={polish} busy={busyIds.includes(chapter.id)} /> : tab === 'plan' ? <Textarea variant="unstyled" className="novel-editor" styles={{ root: { flex: 1, minHeight: 0 }, wrapper: { height: '100%' }, input: { height: '100%', fontSize: 16, lineHeight: 2, resize: 'none', padding: '16px 28px 28px' } }} aria-label="章节细纲" placeholder="本章的事件、场景与人物变化" value={chapter.plan} onChange={e => patch({ plan: e.target.value })} spellCheck={false} /> : <div className="version-list"><Button icon={Save} onClick={() => { store.update(s => { const p = s.projects.find(p => p.id === project.id)!; p.chapters = p.chapters.map(c => c.id === chapter.id ? snapshot(c, '手动保存') : c); }); store.notify('版本已保存'); }}>保存版本</Button>{chapter.versions.length ? chapter.versions.map(v => <UnstyledButton className="version-row" key={v.id} onClick={() => setVersion(v)}><History size={17} /><span>{v.label}<small>{new Date(v.createdAt).toLocaleString('zh-CN')}</small></span><span className="muted">{wordCount(v.content)} 字</span></UnstyledButton>) : <EmptyState>暂无历史版本</EmptyState>}</div>}
         {tab !== 'result' && <div className="editor-footer"><Group gap="md"><Text size="sm">{wordCount(chapter.content).toLocaleString()} 字</Text><Text size="sm" c="dimmed" role="status">{store.saveStatus}</Text></Group><div className="row">{tab === 'content' && <Button primary icon={Save} disabled={saving} aria-busy={saving} onClick={() => void save()}>保存</Button>}<Button onClick={() => setQuickTask('continue')}>续写</Button><Button onClick={() => setQuickTask('review')}>审稿</Button></div></div>}
       </> : <Empty icon={BookOpen} title="暂无章节" action="添加章节" onAction={add} />}
     </section>
