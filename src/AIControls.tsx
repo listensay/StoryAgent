@@ -1,8 +1,13 @@
-import { SimpleGrid, Stack } from '@mantine/core';
+import { Select as MantineSelect, SimpleGrid, Stack, Text } from '@mantine/core';
 import { Button, EmptyState, Modal, Select, type ModalVisibilityProps } from './components';
 import { supportedEfforts, type AISelection, type Provider } from './domain';
+import { ChevronDown } from './icons';
 
 const effortLabels: Record<AISelection['effort'], string> = { default: '默认', low: '低', medium: '中', high: '高', xhigh: '极高' };
+
+export function ReasoningEffortSelect({ provider, value, onChange, inline = false }: { provider?: Provider; value: AISelection; onChange: (value: AISelection) => void; inline?: boolean }) {
+  return <MantineSelect label={inline ? undefined : '推理强度'} aria-label="推理强度" value={value.effort} disabled={!provider} allowDeselect={false} data={supportedEfforts(provider?.protocol).map(effort => ({ value: effort, label: effortLabels[effort] }))} onChange={effort => { if (effort) onChange({ ...value, effort: effort as AISelection['effort'] }); }} rightSection={<ChevronDown size={18} />} {...inline && { w: 152, leftSectionWidth: 76, leftSection: <Text size="sm" c="dimmed" aria-hidden="true">推理强度</Text> }} />;
+}
 
 export function AIControls({ providers, value, onChange, onSettings, columns = 1 }: { providers: Provider[]; value: AISelection; onChange: (value: AISelection) => void; onSettings?: () => void; columns?: number }) {
   const available = providers.filter(p => p.enabled && p.models.length);
@@ -11,7 +16,7 @@ export function AIControls({ providers, value, onChange, onSettings, columns = 1
   return <SimpleGrid cols={{ base: 1, sm: columns }} spacing="md">
     <Select label="AI 供应商" placeholder="选择供应商" value={provider?.id ?? ''} options={available.map(p => ({ value: p.id, label: p.name }))} onChange={providerId => onChange({ ...value, providerId, model: providers.find(p => p.id === providerId)?.models.includes(value.model) ? value.model : '' })} />
     <Select label="模型" placeholder="选择模型" value={provider?.models.includes(value.model) ? value.model : ''} disabled={!provider} options={(provider?.models ?? []).map(model => ({ value: model, label: model }))} onChange={model => onChange({ ...value, model })} />
-    <Select label="推理强度" value={value.effort} disabled={!provider} options={supportedEfforts(provider?.protocol).map(effort => ({ value: effort, label: effortLabels[effort] }))} onChange={effort => onChange({ ...value, effort: effort as AISelection['effort'] })} />
+    <ReasoningEffortSelect provider={provider} value={value} onChange={onChange} />
   </SimpleGrid>;
 }
 

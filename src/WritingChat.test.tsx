@@ -1,7 +1,7 @@
 import { MantineProvider } from '@mantine/core';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { createJob, emptyWorkspace, newChapter, newProject, parseWorkspace } from './domain';
+import { createJob, defaultAdvanced, emptyWorkspace, newChapter, newProject, parseWorkspace } from './domain';
 import { prepareWriting } from './jobWorkflow';
 import { Writing } from './pages/Writing';
 import { WritingChat } from './WritingChat';
@@ -18,6 +18,18 @@ function setup() {
 }
 
 describe('writing chat entry and results', () => {
+  it('shows the saved reasoning effort in the composer without a task settings drawer', () => {
+    const { project, store } = setup();
+    store.state.providers.push({ id: 'qa', name: 'QA', protocol: 'chat', models: ['model'], enabled: true, hasKey: true, baseUrl: 'https://example.test', maxRetries: 0, advanced: defaultAdvanced() });
+    store.state.aiSelection = { providerId: 'qa', model: 'model', effort: 'high' };
+    const html = renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} onSettings={vi.fn()} /></MantineProvider>);
+    const composer = html.slice(html.indexOf('writing-chat-composer'));
+    expect(composer).toMatch(/<input[^>]*aria-label="推理强度"[^>]*value="高"/);
+    expect(composer).toContain('aria-label="章节范围"');
+    expect(composer).toContain('aria-label="目标字数"');
+    expect(html).not.toContain('任务设置');
+  });
+
   it('clears only selected inactive conversations in one chapter and retains their results after reload', () => {
     const { project, job, store } = setup();
     const [first, second] = project.chapters;
@@ -31,6 +43,7 @@ describe('writing chat entry and results', () => {
     expect(render(first.id)).toContain(job.instruction);
     expect(render(second.id)).toContain(batch.instruction);
     expect(render(first.id, batch.id)).toContain('生成稿内容');
+    expect(render(first.id, batch.id)).toContain('aria-label="选择生成稿"');
     expect(render(first.id, batch.id)).toContain('保留的审稿意见');
     const next = createJob(project, 'continue', null, [first.id], '清空后的新任务');
     store.state.jobs.unshift(next);

@@ -48,7 +48,6 @@ small { font-size: 12px; line-height: 1.67; }
 .project-stats { display: flex; gap: 16px; color: var(--mantine-color-gray-7); }
 .project-card-footer { display: flex; justify-content: space-between; align-items: center; margin: 0 24px; padding: 8px 0 14px; border-top: 1px solid var(--mantine-color-gray-1); font-size: 12px; }
 .writing { height: 100%; display: grid; grid-template-columns: 280px minmax(0, 1fr); background: white; }
-.writing.with-agent { grid-template-columns: 280px minmax(0, 1fr) 320px; }
 .chapter-list { border-right: 1px solid var(--mantine-color-gray-2); display: flex; flex-direction: column; min-height: 0; background: #fcfcfc; }
 .panel-heading { min-height: 56px; display: flex; align-items: center; padding: 10px 14px; gap: 6px; border-bottom: 1px solid var(--mantine-color-gray-2); }
 .panel-heading .mantine-Title-root { flex: 1; display: flex; align-items: center; gap: 8px; }
@@ -67,12 +66,6 @@ small { font-size: 12px; line-height: 1.67; }
 .chapter-title { flex: 1; min-width: 0; }
 .novel-editor { min-height: 150px; }
 .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--mantine-color-gray-2); flex-wrap: wrap; color: var(--story-muted); font-size: 12px; }
-.agent-panel { display: flex; flex-direction: column; border-left: 1px solid var(--mantine-color-gray-2); background: #fbfbfb; overflow: hidden; min-height: 0; }
-.agent-tabs { padding: 12px 16px 0; flex-shrink: 0; }
-.agent-scroll { flex: 1; min-height: 0; }
-.agent-panel .panel-heading { position: sticky; top: 0; background: #fbfbfb; z-index: 1; flex-shrink: 0; }
-.agent-form { padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; }
-.agent-form .form-grid { gap: 10px; }
 .writing-result { flex: 1; min-height: 0; overflow: hidden; }
 .writing-result-scroll { flex: 1; min-height: 0; }
 .writing-result-content { max-width: 820px; margin: 0 auto; padding: 12px 28px 32px; }
@@ -127,8 +120,7 @@ small { font-size: 12px; line-height: 1.67; }
 .modal-footer { border-top: 1px solid var(--mantine-color-gray-2); }
 .load-screen { min-height: 100dvh; padding: 32px; }
 @media (max-width: 1439px) {
-  .writing, .writing.with-agent { grid-template-columns: minmax(0, 1fr); position: relative; }
-  .writing.with-agent { grid-template-columns: minmax(0, 1fr) 320px; }
+  .writing { grid-template-columns: minmax(0, 1fr); position: relative; }
   .mobile-only { display: inline-flex; }
   .chapter-title-row { flex-wrap: wrap; }
 }
@@ -145,15 +137,12 @@ small { font-size: 12px; line-height: 1.67; }
   .app-header { padding: 10px 14px; }
   .section-heading { align-items: flex-start; gap: 12px; }
   .search { width: 100%; }
-  .writing.with-agent { grid-template-columns: minmax(0, 1fr); }
-  .agent-panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(340px, 100%); z-index: 5; box-shadow: var(--mantine-shadow-md); }
   .editor-toolbar { padding: 10px 12px; }
   .chapter-title-row { padding: 16px 18px 8px; }
   .chapter-title-row .row { gap: 0; }
   .editor-footer { padding: 10px 14px; }
   .form-grid, .form-grid.three, .chapter-plans, .diff { grid-template-columns: 1fr; }
   .diff { grid-template-rows: repeat(2, minmax(0, 1fr)); }
-  .agent-form .form-grid { grid-template-columns: 1fr 1fr; }
   .check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .note-grid, .skill-grid, .project-grid { grid-template-columns: 1fr; }
   .novel-information, .cover-studio { grid-template-columns: 1fr; }
