@@ -59,6 +59,10 @@ small { font-size: 12px; line-height: 1.67; }
 .chapter-list-item[data-drop-position]::after { content: ''; position: absolute; left: 8px; right: 8px; height: 2px; background: var(--mantine-color-story-7); pointer-events: none; }
 .chapter-list-item[data-drop-position="before"]::after { top: -4px; }
 .chapter-list-item[data-drop-position="after"]::after { bottom: -4px; }
+.chapter-delete-item:is(:hover, :focus, [data-menu-active]):not(:disabled, [data-disabled]) {
+  background-color: var(--mantine-color-red-8);
+  color: var(--mantine-color-white);
+}
 .chapter-footer { color: var(--story-muted); font-size: 12px; padding: 14px 20px; border-top: 1px solid var(--mantine-color-gray-2); }
 .editor-section { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .editor-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; min-height: 56px; border-bottom: 1px solid var(--mantine-color-gray-2); flex-shrink: 0; gap: 10px; }

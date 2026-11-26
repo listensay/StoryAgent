@@ -5,8 +5,8 @@ import { publishJobOutput } from './jobOutput';
 describe('streamed job output', () => {
   it('updates only the target step and preserves unrelated workspace objects', () => {
     const state = emptyWorkspace();
-    const job = createJob(undefined, 'analyze', null, [], '');
-    const otherJob = createJob(undefined, 'style', null, [], '');
+    const job = createJob(undefined, 'analyze', null, undefined, '');
+    const otherJob = createJob(undefined, 'style', null, undefined, '');
     const step = job.steps[0];
     const completedStep = { ...step, id: 'completed', status: 'ready' as const, output: '已有结果' };
     job.steps.push(completedStep);
@@ -26,7 +26,7 @@ describe('streamed job output', () => {
   it('does not recreate removed jobs or steps when a late chunk arrives', () => {
     const state = emptyWorkspace();
     expect(publishJobOutput(state, 'removed', 'step', 'late')).toBe(state);
-    const job = createJob(undefined, 'analyze', null, [], '');
+    const job = createJob(undefined, 'analyze', null, undefined, '');
     state.jobs = [job];
     expect(publishJobOutput(state, job.id, 'removed', 'late')).toBe(state);
   });

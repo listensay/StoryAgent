@@ -87,7 +87,7 @@ export function ChapterList({ chapters, selectedId, busyIds, onSelect, onMove, o
         <Menu.Item leftSection={<MoveToTop size={18} />} disabled={index === 0} onClick={() => onMove(chapter.id, 0)}>移到顶部</Menu.Item>
         <Menu.Item leftSection={<MoveToBottom size={18} />} disabled={index === chapters.length - 1} onClick={() => onMove(chapter.id, chapters.length - 1)}>移到底部</Menu.Item>
         <Menu.Divider />
-        <Menu.Item color="red.8" leftSection={<Trash2 size={18} />} disabled={busyIds.includes(chapter.id)} onClick={() => onRemove(chapter.id)}>删除章节</Menu.Item>
+        <Menu.Item className="chapter-delete-item" color="red.8" leftSection={<Trash2 size={18} />} disabled={busyIds.includes(chapter.id)} onClick={() => onRemove(chapter.id)}>删除章节</Menu.Item>
       </Menu.Dropdown>
     </Menu>
   </Box>)}</Stack></ScrollArea>;

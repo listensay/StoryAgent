@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { acceptedChapter, newChapter, now, uid, type Job, type JobStep, type Project, type TaskKind, type Workspace } from './domain';
+import { acceptedChapter, now, uid, type Job, type JobStep, type Project, type Workspace } from './domain';
 import { parseSkills } from './skills';
 import { relationByNames, resolveCharacterRelation } from './characterRelations';
 import { composedSkillText, extractedSkillFiles, parseSkillComposition, parseSkillResearch, skillSnapshot } from './skillExtraction';
@@ -31,11 +31,6 @@ export function openWriting(state: Workspace, projectId: string) {
   if (!project) return;
   state.activeProjectId = project.id;
   return project.chapters[project.chapters.length - 1];
-}
-export function writingTarget(project: Project | undefined, kind: TaskKind, chapterIds: string[]) {
-  if (!project || kind !== 'draft' || project.chapters.length || chapterIds.length) return { project, chapterIds, addedChapter: undefined };
-  const addedChapter = newChapter(project.form === 'short' ? '正文' : '第一章');
-  return { project: { ...project, chapters: [addedChapter] }, chapterIds: [addedChapter.id], addedChapter };
 }
 export function prepareWriting(job: Job) {
   if (!['draft', 'continue', 'rewrite'].includes(job.kind)) return;

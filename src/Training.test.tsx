@@ -10,7 +10,7 @@ import type { Store } from './useWorkspace';
 function setup() {
   const state = emptyWorkspace(), skill = parseSkills([{ path: 'SKILL.md', content: '---\nname: dialogue\ndescription: 对白训练\n---\n以具体动作承接对白。' }], '测试')[0];
   state.skills.push(skill);
-  const job = createJob(undefined, 'train', null, [], '');
+  const job = createJob(undefined, 'train', null, undefined, '');
   job.sourceTitle = skill.name; job.status = 'waiting';
   job.training = { skillId: skill.id, initialSkill: skill.files[0].content, bestSkill: skill.files[0].content, bestScore: -1, targetScore: 8.5, judge: 'human', mode: 'chapter', original: '原文中的人物有所犹豫。', cases: [{ title: '第一章', brief: '描写人物的犹豫。', original: '' }], evaluations: [] };
   initializeTraining(job); job.steps[0].status = 'accepted'; job.steps[0].output = '生成稿中的人物立即行动。'; state.jobs.push(job);

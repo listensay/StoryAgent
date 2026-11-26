@@ -15,7 +15,7 @@ function research(paragraph = 1, title = '体面理由与真实欲望', category
   return { profile: '人物用体面说辞掩饰私心，叙述贴近人物，反应简短而具体。', mechanisms: [{ title, category, trigger: '人物谈判价格，又要维持身份和面子时使用。', steps: ['先让人物公开表示对价格无所谓。', '用一次不肯让步的动作泄露他的真实在意。'], effect: '读者先识破私心，人物仍在维护体面。', example: '掌柜说只是交个朋友，却把少了一枚的铜钱推回桌子中央。', avoid: '说完动作又解释他其实很在意钱；删掉解释，让对方加码回应。', check: '删去旁白评价后，能否从动作读出真实诉求？', evidence: [{ start: paragraph, quote: '人物' }] }] };
 }
 function extraction(source = '人物正在争论报价。') {
-  const job = createJob(undefined, 'style', config, [], ''); job.sourceId = 'novel-source'; job.sourceTitle = '参考小说'; job.sourceText = source;
+  const job = createJob(undefined, 'style', config, undefined, ''); job.sourceId = 'novel-source'; job.sourceTitle = '参考小说'; job.sourceText = source;
   prepareSkillExtraction(job, config);
   job.steps.filter(step => step.stage === 'style-research').forEach((step, i) => {
     const paragraph = Number(step.section.match(/\[P(\d+)\]/)![1]);
@@ -33,7 +33,7 @@ describe('完整写法提炼与保存', () => {
     expect(prompt.user).toContain('原创迁移示例'); expect(prompt.user).not.toContain('1200 字以内');
     const ids = job.steps.map(step => step.id); prepareSkillExtraction(job, config);
     expect(job.steps.map(step => step.id)).toEqual(ids);
-    expect(() => prepareSkillExtraction(createJob(undefined, 'style', config, [], ''), { ...config, maxTokens: 1024 })).toThrow('输出上限');
+    expect(() => prepareSkillExtraction(createJob(undefined, 'style', config, undefined, ''), { ...config, maxTokens: 1024 })).toThrow('输出上限');
   });
 
   it('最终综合再简短也不会删除各分段的步骤、示例、反例与证据', () => {
@@ -219,7 +219,7 @@ describe('写作时按场景使用完整写法资源', () => {
     const project = newProject('轻松经营小说', 'long'); project.genre = '轻松喜剧'; project.skillIds = [skill.id];
     project.chapters[0].plan = '掌柜与买家谈判价格，双方维护身份与面子。'; state.projects.push(project);
     const writingConfig = { ...config, contextChars: 10000 };
-    const writingJob = createJob(project, 'draft', writingConfig, [project.chapters[0].id], ''); writingJob.skillIds = [skill.id];
+    const writingJob = createJob(project, 'draft', writingConfig, project.chapters[0].id, ''); writingJob.skillIds = [skill.id];
     return { state, skill, writingConfig, writingJob };
   }
 

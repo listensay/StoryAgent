@@ -9,8 +9,8 @@ import { Markdown } from './Markdown';
 import { useAIScroll } from './useAIScroll';
 import { writingCompleted, writingSkillFiles, writingStageName } from './writingActivity';
 
-export function WritingChat({ job, history, chapterId, project, store, onResult }: { job?: Job; history?: Job[]; chapterId?: string; project: Project; store: Store; onResult: (chapterId: string, jobId?: string) => void }) {
-  const entries = (history ?? (job ? [job] : [])).filter(entry => !chapterId || entry.steps.some(step => step.chapterId === chapterId)).map(entry => chapterId ? { ...entry, steps: entry.steps.filter(step => step.chapterId === chapterId) } : entry);
+export function WritingChat({ job, history, chapterId, project, store, onResult }: { job?: Job; history?: Job[]; chapterId: string; project: Project; store: Store; onResult: (jobId: string) => void }) {
+  const entries = (history ?? (job ? [job] : [])).filter(entry => entry.steps.some(step => step.chapterId === chapterId)).map(entry => ({ ...entry, steps: entry.steps.filter(step => step.chapterId === chapterId) }));
   const taskRefs = useRef(new Map<string, HTMLDivElement>());
   const generating = entries.some(entry => ['queued', 'running'].includes(entry.status));
   const { contentRef, scrollToBottom } = useAIScroll(generating);
@@ -28,12 +28,12 @@ export function WritingChat({ job, history, chapterId, project, store, onResult 
   </Stack>;
 }
 
-function WritingConversation({ job, project, store, onResult }: { job: Job; project: Project; store: Store; onResult: (chapterId: string, jobId?: string) => void }) {
+function WritingConversation({ job, project, store, onResult }: { job: Job; project: Project; store: Store; onResult: (jobId: string) => void }) {
   const [aiOpen, setAIOpen] = useState(false);
   const generating = ['queued', 'running'].includes(job.status);
   const steps = job.steps.filter(step => step.execution || step.reasoning || step.output || step.status !== 'pending');
   const completed = writingCompleted(job);
-  const results = job.steps.filter(step => !step.intermediate && step.output && project.chapters.some(chapter => chapter.id === step.chapterId));
+  const hasResult = job.steps.some(step => !step.intermediate && step.output && project.chapters.some(chapter => chapter.id === step.chapterId));
   return <Stack gap="xl">
     <Stack gap={8} align="flex-end">
       <Paper className="writing-chat-request" p="md" radius="lg" shadow="none" withBorder={false} maw="92%">
@@ -45,7 +45,7 @@ function WritingConversation({ job, project, store, onResult }: { job: Job; proj
       {steps.map(step => <StepActivity key={step.id} job={job} step={step} store={store} />)}
       {generating && <Group gap="sm" px="xs" role="status"><Loader size={16} /><Text size="sm" c="dimmed">{steps.length ? '创作任务进行中' : job.status === 'queued' ? '任务排队中' : '正在读取任务资料'}</Text></Group>}
     </Stack>
-    {completed && <Stack gap="xs" px="xs" role="status"><Group gap="sm"><Check size={19} color="var(--mantine-color-teal-7)" /><Text size="sm" fw={500}>创作任务已完成</Text></Group><Group gap="md" pl={27}>{results.map(step => <Anchor component="button" key={step.id} size="sm" onClick={() => onResult(step.chapterId, job.id)}>{results.length === 1 ? '查看生成稿' : `查看${project.chapters.find(chapter => chapter.id === step.chapterId)?.title}生成稿`}</Anchor>)}</Group></Stack>}
+    {completed && <Stack gap="xs" px="xs" role="status"><Group gap="sm"><Check size={19} color="var(--mantine-color-teal-7)" /><Text size="sm" fw={500}>创作任务已完成</Text></Group><Group gap="md" pl={27}>{hasResult && <Anchor component="button" size="sm" onClick={() => onResult(job.id)}>查看生成稿</Anchor>}</Group></Stack>}
     {['paused', 'failed'].includes(job.status) && <Text size="sm" c={job.status === 'failed' ? 'red.8' : 'dimmed'} role="status">{job.status === 'failed' ? '创作任务失败' : '创作任务已停止'}</Text>}
     {job.error && <Text size="sm" c="red.8" role="alert">{job.error}</Text>}
     <Group justify="flex-end" gap="xs" px="lg" py="sm" className="writing-chat-controls">

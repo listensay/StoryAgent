@@ -47,7 +47,7 @@ export function createCreationRound(state: Workspace, draft: CreationDraft, inst
   const prompt = creationPrompt(draft, draft.stage, trimmed);
   if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('创作要求超过上下文上限，请调整 AI 上下文');
   const roundId = uid();
-  const job = createJob(undefined, 'plan', config, [], trimmed);
+  const job = createJob(undefined, 'plan', config, undefined, trimmed);
   job.creationTask = { draftId: draft.id, roundId, stage: draft.stage };
   job.sourceText = JSON.stringify(prompt); job.sourceTitle = `新建小说 · ${creationStageNames[draft.stage]}`;
   job.steps[0].title = `生成${creationStageNames[draft.stage]}方案`;

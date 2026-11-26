@@ -7,7 +7,7 @@ import { AIRequestQueue, runJobSteps } from './stepQueue';
 const config = { ...newAISelection(), ...defaultAdvanced(), providerId: 'a', model: 'test', contextChars: 4000 };
 const skill = '---\nname: test-skill\ndescription: 测试提炼结果\n---\n# 写作规则\n以人物动机推动冲突。';
 function analysis(count: number, providerId = 'a') {
-  const job = createJob(undefined, 'style', { ...config, providerId }, [], '');
+  const job = createJob(undefined, 'style', { ...config, providerId }, undefined, '');
   job.sourceText = Array.from({ length: count }, (_, i) => `段落${i}。${'故事内容。'.repeat(200)}`).join('\n\n');
   prepareAnalysis(job, job.ai!);
   expect(job.steps.filter(s => !s.aggregate)).toHaveLength(count);
@@ -166,7 +166,7 @@ describe('Skill 分段并发执行', () => {
 
   it('写作阶段保持串行，人工评分仍停在等待状态', async () => {
     const project = newProject('小说', 'long');
-    const job = createJob(project, 'draft', config, [project.chapters[0].id], ''); prepareWriting(job);
+    const job = createJob(project, 'draft', config, project.chapters[0].id, ''); prepareWriting(job);
     const calls: string[] = [], gates = new Map<string, ReturnType<typeof deferred<void>>>();
     const run = runJobSteps(() => job, () => 10, new AbortController().signal, async id => {
       calls.push(id); const gate = deferred<void>(); gates.set(id, gate); await gate.promise;
@@ -177,7 +177,7 @@ describe('Skill 分段并发执行', () => {
       expect(calls[i]).toBe(job.steps[i].id); gates.get(calls[i])!.resolve();
     }
     await run;
-    const train = createJob(undefined, 'train', config, [], '');
+    const train = createJob(undefined, 'train', config, undefined, '');
     const execute = vi.fn(async () => 'waiting' as const);
     await expect(runJobSteps(() => train, () => 10, new AbortController().signal, execute)).resolves.toBe('waiting');
     expect(execute).toHaveBeenCalledTimes(1);

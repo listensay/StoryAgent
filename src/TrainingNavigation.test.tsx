@@ -8,7 +8,7 @@ import type { Store } from './useWorkspace';
 
 const makeSkill = (name: string) => parseSkills([{ path: 'SKILL.md', content: `---\nname: ${name}\ndescription: ${name}的写作规则\n---\n用具体行动表现人物目标。` }], '文件导入')[0];
 function history(state: Workspace, skill: Skill, text: string) {
-  const job = createJob(undefined, 'train', null, [], '');
+  const job = createJob(undefined, 'train', null, undefined, '');
   job.sourceTitle = skill.name; job.status = 'accepted';
   job.training = { skillId: skill.id, initialSkill: skill.files[0].content, bestSkill: skill.files[0].content, bestScore: -1, targetScore: 8.5, judge: 'human', mode: 'chapter', original: '原文章节', cases: [{ title: text, brief: text, original: '' }], evaluations: [] };
   job.steps[0] = { ...job.steps[0], stage: 'train-write', round: 1, caseIndex: 0, status: 'accepted', output: text };

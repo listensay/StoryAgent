@@ -6,7 +6,7 @@ import { readArticlePage, readResearchCatalog, readResearchChapter } from './pla
 vi.mock('./platform', () => ({ readArticlePage: vi.fn(), readResearchCatalog: vi.fn(), readResearchChapter: vi.fn() }));
 const catalog = { title: '测试书', bookUrl: 'https://example.com/book', chapters: [1, 2].map(n => ({ id: String(n), title: `第${n}章`, url: `https://example.com/chapter/${n}`, readable: true })) };
 function setup() {
-  const state = emptyWorkspace(), job = createJob(undefined, 'collect', null, [], ''); state.jobs = [job];
+  const state = emptyWorkspace(), job = createJob(undefined, 'collect', null, undefined, ''); state.jobs = [job];
   const update = (mutation: (draft: Workspace) => void) => { mutation(state); };
   return { state, job, update, current: () => state };
 }

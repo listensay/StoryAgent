@@ -9,7 +9,7 @@ import { writingCompleted, writingSkillFiles } from './writingActivity';
 describe('writing activity persistence and completion', () => {
   it('keeps analysis separate from the manuscript and restores execution snapshots', () => {
     const state = emptyWorkspace(), project = newProject('测试小说', 'long');
-    const job = createJob(project, 'draft', null, [project.chapters[0].id], '创作要求');
+    const job = createJob(project, 'draft', null, project.chapters[0].id, '创作要求');
     state.projects.push(project); state.jobs.push(job);
     job.steps[0].execution = { summary: '读取小说资料。', skills: [{ id: 'builtin-draft', name: '小说创作', version: '1.0', files: ['SKILL.md'] }], startedAt: '2026-11-22T00:00:00Z' };
     const next = publishJobOutput(state, job.id, job.steps[0].id, '正文内容', '分析内容');
@@ -21,7 +21,7 @@ describe('writing activity persistence and completion', () => {
 
   it('requires every writing stage to finish before showing completion', () => {
     const project = newProject('测试小说', 'long');
-    const job = createJob(project, 'draft', null, [project.chapters[0].id], ''); prepareWriting(job);
+    const job = createJob(project, 'draft', null, project.chapters[0].id, ''); prepareWriting(job);
     job.status = 'ready'; job.steps.find(step => !step.intermediate)!.status = 'ready';
     expect(writingCompleted(job)).toBe(false);
     job.steps.forEach(step => { step.status = 'ready'; }); expect(writingCompleted(job)).toBe(true);
@@ -32,7 +32,7 @@ describe('writing activity persistence and completion', () => {
   it('records only the skills and resources actually included for each stage', () => {
     const state = emptyWorkspace(), project = newProject('测试小说', 'long'); state.projects.push(project);
     const config = { ...newAISelection(), ...defaultAdvanced() };
-    const job = createJob(project, 'draft', config, [project.chapters[0].id], '');
+    const job = createJob(project, 'draft', config, project.chapters[0].id, '');
     const skill = state.skills.find(skill => skill.id === 'builtin-draft')!;
     skill.files.push({ path: 'references/unrelated.txt', content: '未读取资料' });
     expect(buildPrompt(state, job, job.steps[0], config).skills).toEqual([{ id: skill.id, name: skill.name, version: skill.version, files: ['SKILL.md', 'references/unrelated.txt'], contents: skill.files }]);
@@ -53,7 +53,7 @@ describe('writing activity persistence and completion', () => {
     ];
     project.skillIds = [skill.id];
     const config = { ...newAISelection(), ...defaultAdvanced() };
-    const job = createJob(project, 'draft', config, [project.chapters[0].id], ''); state.jobs.push(job);
+    const job = createJob(project, 'draft', config, project.chapters[0].id, ''); state.jobs.push(job);
     const loaded = buildPrompt(state, job, job.steps[0], config).skills;
     const expected = structuredClone(skill.files.slice(0, 2));
     expect(loaded[0].contents).toEqual(expected);

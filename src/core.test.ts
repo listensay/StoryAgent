@@ -1,3 +1,4 @@
+import { legacyWritingJob } from './testFixtures';
 import { describe, expect, it, vi } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { acceptedChapter, createJob, emptyWorkspace, importChapters, newChapter, newAISelection, defaultAdvanced, newProject, normalizeAISelection, parseWorkspace, resolveAI, snapshot, validateAI, validateProvider, wordCount, type Provider } from './domain';
@@ -19,18 +20,18 @@ describe('novel data and safe changes', () => {
   });
   it('does not share mutable builtin resources between workspaces', () => { const a = emptyWorkspace(), b = emptyWorkspace(); a.skills[0].files[0].content = 'changed'; expect(b.skills[0].files[0].content).not.toBe('changed'); });
   it('hydrates interrupted jobs as paused and rejects incompatible backups', () => {
-    const s = emptyWorkspace(); s.jobs.push(createJob(undefined, 'scan', null, [], '')); s.jobs[0].steps[0].status = 'running';
+    const s = emptyWorkspace(); s.jobs.push(createJob(undefined, 'scan', null, undefined, '')); s.jobs[0].steps[0].status = 'running';
     const loaded = parseWorkspace(JSON.stringify(s)); expect(loaded.jobs[0].status).toBe('paused'); expect(loaded.jobs[0].steps[0].status).toBe('pending');
     expect(() => parseWorkspace('{"schemaVersion":99}')).toThrow();
   });
   it('replaces only the selected span and preserves a recovery version', () => {
     const p = newProject('测试', 'long'); p.chapters[0].content = '甲走进房间。乙抬头。';
-    const job = createJob(p, 'rewrite', config(), [p.chapters[0].id], '', '', '', { start: 0, end: 6 }); const step = job.steps[0]; step.output = '甲推开门。';
+    const job = createJob(p, 'rewrite', config(), p.chapters[0].id, '', '', '', { start: 0, end: 6 }); const step = job.steps[0]; step.output = '甲推开门。';
     const updated = acceptedChapter(p.chapters[0], job, step); expect(updated.content).toBe('甲推开门。乙抬头。'); expect(updated.versions[0].content).toBe(step.baseContent);
     expect(() => acceptedChapter({ ...p.chapters[0], content: 'new text' }, job, step)).toThrow('正文已更新');
   });
   it('appends continuation and retains at most 100 distinct revisions', () => {
-    const p = newProject('测试', 'short'); p.chapters[0].content = '原文'; const job = createJob(p, 'continue', config(), [p.chapters[0].id], ''); job.steps[0].output = '新文';
+    const p = newProject('测试', 'short'); p.chapters[0].content = '原文'; const job = createJob(p, 'continue', config(), p.chapters[0].id, ''); job.steps[0].output = '新文';
     expect(acceptedChapter(p.chapters[0], job, job.steps[0]).content).toBe('原文\n\n新文');
     let c = newChapter(); for (let i = 0; i < 105; i++) c = snapshot({ ...c, content: `version${i}` }, 'edit'); expect(c.versions).toHaveLength(100);
   });
@@ -41,7 +42,7 @@ describe('provider models and per-task AI configuration', () => {
     const first = { ...config(), id: 'first', name: '写作', tasks: ['draft'], maxTokens: 4096 };
     const second = { ...config(), id: 'second', name: '研究', tasks: ['analyze'], model: 'manual-model', maxTokens: 16384, contextChars: 128000, reasoning: 'effort', effort: 'high' };
     const oldProvider = { ...provider(), models: ['mock-model', ' mock-model ', 'listed-model'], advanced: undefined };
-    const oldJob = { ...createJob(undefined, 'scan', null, [], ''), ai: undefined, profileId: second.id };
+    const oldJob = { ...createJob(undefined, 'scan', null, undefined, ''), ai: undefined, profileId: second.id };
     const legacy = { ...emptyWorkspace(), schemaVersion: 1, providers: [oldProvider], profiles: [first, second], jobs: [oldJob, { ...oldJob, id: 'missing-profile', profileId: 'removed' }] };
     const migrated = parseWorkspace(JSON.stringify(legacy));
     expect(migrated.schemaVersion).toBe(2);
@@ -70,7 +71,7 @@ describe('provider models and per-task AI configuration', () => {
     const p = provider(); p.advanced = { ...defaultAdvanced(), maxTokens: 16384, contextChars: 96000, sampling: true, temperature: 0.5, extra: '{"top_p":0.9}' };
     const selection = { ...newAISelection(), providerId: p.id, model: p.models[0], effort: 'high' as const };
     const resolved = resolveAI(selection, [p]);
-    const job = createJob(undefined, 'scan', resolved, [], '');
+    const job = createJob(undefined, 'scan', resolved, undefined, '');
     p.advanced.maxTokens = 2048; resolved.effort = 'low';
     expect(job.ai).toMatchObject({ maxTokens: 16384, contextChars: 96000, effort: 'high' });
     expect(requestBody(p, job.ai!, '', '').body).toMatchObject({ model: 'mock-model', max_completion_tokens: 16384, reasoning_effort: 'high', top_p: 0.9 });
@@ -107,7 +108,7 @@ describe('shared AI selection', () => {
   it.each(['effort', 'budget', 'adaptive', 'off'] as const)('migrates the old %s mode in preferences and task snapshots', reasoning => {
     const state = emptyWorkspace(); state.providers = [provider()];
     const legacy = { providerId: 'test', model: 'mock-model', reasoning, effort: 'high', budget: 4096 };
-    const job = createJob(undefined, 'scan', config(), [], '');
+    const job = createJob(undefined, 'scan', config(), undefined, '');
     const restored = parseWorkspace(JSON.stringify({ ...state, aiSelection: legacy, jobs: [{ ...job, ai: { ...job.ai, ...legacy } }] }));
     const expected = { providerId: 'test', model: 'mock-model', effort: reasoning === 'effort' ? 'high' : 'default' };
     expect(restored.aiSelection).toEqual(expected);
@@ -119,9 +120,9 @@ describe('shared AI selection', () => {
   });
   it('restores the newest available selection when an older workspace has no shared preference', () => {
     const state = emptyWorkspace(); state.providers = [provider()];
-    const older = { ...createJob(undefined, 'scan', config(), [], ''), createdAt: '2026-10-01T00:00:00Z' };
-    const recent = { ...createJob(undefined, 'review', { ...config(), effort: 'high' }, [], ''), createdAt: '2026-11-01T00:00:00Z' };
-    const unavailable = { ...createJob(undefined, 'scan', { ...config(), providerId: 'removed' }, [], ''), createdAt: '2026-11-02T00:00:00Z' };
+    const older = { ...createJob(undefined, 'scan', config(), undefined, ''), createdAt: '2026-10-01T00:00:00Z' };
+    const recent = { ...createJob(undefined, 'scan', { ...config(), effort: 'high' }, undefined, ''), createdAt: '2026-11-01T00:00:00Z' };
+    const unavailable = { ...createJob(undefined, 'scan', { ...config(), providerId: 'removed' }, undefined, ''), createdAt: '2026-11-02T00:00:00Z' };
     state.jobs = [older, unavailable, recent];
     const restored = parseWorkspace(JSON.stringify({ ...state, aiSelection: undefined }));
     expect(restored.aiSelection).toEqual({ ...newAISelection(), providerId: 'test', model: 'mock-model', effort: 'high' });
@@ -132,7 +133,7 @@ describe('shared AI selection', () => {
     expect(parseWorkspace(JSON.stringify(legacy)).aiSelection).toMatchObject({ providerId: 'test', model: 'mock-model', effort: 'high' });
   });
   it('keeps an explicit incomplete choice instead of restoring a past task on restart', () => {
-    const state = emptyWorkspace(); state.providers = [provider()]; state.jobs = [createJob(undefined, 'scan', config(), [], '')];
+    const state = emptyWorkspace(); state.providers = [provider()]; state.jobs = [createJob(undefined, 'scan', config(), undefined, '')];
     state.aiSelection = { ...newAISelection(), providerId: 'test', effort: 'high' };
     expect(parseWorkspace(JSON.stringify(state)).aiSelection).toEqual(state.aiSelection);
   });
@@ -179,7 +180,7 @@ describe('Skill import and history', () => {
       { path: 'write/references/revision.md', content: '修订必须保留人物已经知道的事实。' },
     ], 'file');
     const project = newProject('修订', 'long'); project.chapters[0].content = '正文'; state.projects.push(project);
-    const job = createJob(project, 'rewrite', profile, [project.chapters[0].id], '保持事实');
+    const job = createJob(project, 'rewrite', profile, project.chapters[0].id, '保持事实');
     expect(buildPrompt(state, job, job.steps[0], profile).system).toContain('修订必须保留人物已经知道的事实');
   });
 });
@@ -205,14 +206,14 @@ describe('long context and source citations', () => {
   it('requires full manuscript for whole-chapter rewrite', () => {
     const state = emptyWorkspace(), project = newProject('改写', 'long'), p = config(); p.contextChars = 4000;
     project.chapters[0].content = '开头重要事实' + '正文'.repeat(3000) + '结尾'; state.projects.push(project);
-    const job = createJob(project, 'rewrite', p, [project.chapters[0].id], '保留全部事件');
+    const job = createJob(project, 'rewrite', p, project.chapters[0].id, '保留全部事件');
     expect(() => buildPrompt(state, job, job.steps[0], p)).toThrow('超过上下文');
     p.contextChars = 16000; const prompt = buildPrompt(state, job, job.steps[0], p);
     expect(prompt.user).toContain(project.chapters[0].content);
   });
   it('synthesizes complete segment outputs through successive layers', () => {
     const state = emptyWorkspace(), p = config(); p.contextChars = 4000;
-    const job = createJob(undefined, 'analyze', p, [], '');
+    const job = createJob(undefined, 'analyze', p, undefined, '');
     job.sourceText = Array.from({ length: 100 }, (_, i) => `段落${i + 1} ${'内容'.repeat(70)}`).join('\n\n');
     prepareAnalysis(job, p);
     const parts = job.steps.filter(s => s.intermediate);
@@ -232,11 +233,11 @@ describe('long context and source citations', () => {
   it('includes previous unaccepted batch output for chapter continuity', () => {
     const state = emptyWorkspace(), project = newProject('连载', 'long'), p = config(); p.contextChars = 4000;
     project.chapters.push(newChapter('第二章')); project.outline = '计划'.repeat(4000); state.projects.push(project);
-    const job = createJob(project, 'draft', p, project.chapters.map(c => c.id), '');
+    const job = legacyWritingJob(project, 'draft', p, project.chapters.map(c => c.id), '');
     job.steps[0].output = '人物已前往北站。'; job.steps[0].status = 'ready';
     const prompt = buildPrompt(state, job, job.steps[1], p);
     expect(prompt.user).toContain('人物已前往北站。'); expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(4000);
   });
-  it('covers all paragraphs in chunked analysis and synthesizes them', () => { const p = config(); p.contextChars = 4000; const text = Array.from({ length: 70 }, (_, i) => `第${i + 1}段 ${'文本'.repeat(50)}`).join('\n\n'); const chunks = sourceChunks(text, 1800); for (let i = 1; i <= 70; i++) expect(chunks.join('\n')).toContain(`[P${i}] `); const job = createJob(undefined, 'analyze', p, [], ''); job.sourceText = text; prepareAnalysis(job, p); expect(job.steps[job.steps.length - 1]?.aggregate).toBe(true); expect(job.steps.slice(0, -1).every(s => s.intermediate)).toBe(true); const state = emptyWorkspace(); for (const step of job.steps) { const prompt = buildPrompt(state, job, step, p); expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(p.contextChars); } expect(numberedText('一\n\n二')).toBe('[P1] 一\n\n[P2] 二'); });
-  it('keeps author instruction, selection and resumed output under heavy context', () => { const state = emptyWorkspace(), project = newProject('测试', 'long'), p = config(); p.contextChars = 4000; project.outline = '大纲'.repeat(10000); project.chapters[0].content = '正文'.repeat(10000); state.projects.push(project); const job = createJob(project, 'rewrite', p, [project.chapters[0].id], '保留重要要求', '', '', { start: 0, end: 10 }); job.steps[0].output = '已生成片段'; const prompt = buildPrompt(state, job, job.steps[0], p); expect(prompt.user).toContain('保留重要要求'); expect(prompt.user).toContain('指定改写片段'); expect(prompt.user).toContain('已生成片段'); expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(4000); });
+  it('covers all paragraphs in chunked analysis and synthesizes them', () => { const p = config(); p.contextChars = 4000; const text = Array.from({ length: 70 }, (_, i) => `第${i + 1}段 ${'文本'.repeat(50)}`).join('\n\n'); const chunks = sourceChunks(text, 1800); for (let i = 1; i <= 70; i++) expect(chunks.join('\n')).toContain(`[P${i}] `); const job = createJob(undefined, 'analyze', p, undefined, ''); job.sourceText = text; prepareAnalysis(job, p); expect(job.steps[job.steps.length - 1]?.aggregate).toBe(true); expect(job.steps.slice(0, -1).every(s => s.intermediate)).toBe(true); const state = emptyWorkspace(); for (const step of job.steps) { const prompt = buildPrompt(state, job, step, p); expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(p.contextChars); } expect(numberedText('一\n\n二')).toBe('[P1] 一\n\n[P2] 二'); });
+  it('keeps author instruction, selection and resumed output under heavy context', () => { const state = emptyWorkspace(), project = newProject('测试', 'long'), p = config(); p.contextChars = 4000; project.outline = '大纲'.repeat(10000); project.chapters[0].content = '正文'.repeat(10000); state.projects.push(project); const job = createJob(project, 'rewrite', p, project.chapters[0].id, '保留重要要求', '', '', { start: 0, end: 10 }); job.steps[0].output = '已生成片段'; const prompt = buildPrompt(state, job, job.steps[0], p); expect(prompt.user).toContain('保留重要要求'); expect(prompt.user).toContain('指定改写片段'); expect(prompt.user).toContain('已生成片段'); expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(4000); });
 });

@@ -9,7 +9,7 @@ const brief = '林舟发现钟表停摆，获得通往未来的车票，票背�
 const transfers = ['科幻飞船补给不足，舰长必须在救援与返航之间做出选择。', '边关军医缺少药材，必须说服对手开放商路救治伤员。', '社区厨师面临停业，需要在宴席开始前重建邻里的信任。'];
 function setup(mode: 'chapter' | 'scenario' = 'chapter') {
   const state = emptyWorkspace(), skill = parseSkills([{ path: 'SKILL.md', content: rules }], '测试')[0]; state.skills.push(skill);
-  const job = createJob(undefined, 'train', null, [], '');
+  const job = createJob(undefined, 'train', null, undefined, '');
   job.sourceText = '不应泄漏的参考资料'; job.sourceTitle = '原作标题';
   job.training = validateTraining({ skillId: skill.id, initialSkill: rules, bestSkill: rules, bestScore: -1, targetScore: 9, judge: 'human', mode, chapterTitle: '第一章', original, cases: [], evaluations: [] });
   initializeTraining(job); state.jobs.push(job); return { state, skill, job };

@@ -10,7 +10,7 @@ function setup(sourceText: string) {
   project.genre = '悬疑'; project.theme = '保留作者主题'; project.targetWords = 300000;
   project.notes = [{ id: 'author-note', kind: 'character', title: '作者人物', body: '保留作者设定', status: 'planned', chapterId: '' }];
   state.projects.push(project);
-  const job = createJob(project, 'prepare', config, [], '保留作者约束');
+  const job = createJob(project, 'prepare', config, undefined, '保留作者约束');
   job.sourceText = sourceText; job.sourceTitle = '参考小说'; job.preparationBase = preparationSnapshot(project);
   state.jobs.push(job);
   return { state, project, job };

@@ -10,7 +10,7 @@ function setup() {
   const definition = '---\nname: comic-dialogue\ndescription: 对话与喜剧节拍\n---\n' + '场景要求与适用边界。\n\n'.repeat(640) + '\n## 关键对白规则\n用身份反差和言行错位完成笑点，不替读者解释。';
   const skill = parseSkills([{ path: 'SKILL.md', content: definition }], '小说提炼')[0];
   skill.originReferenceId = 'original'; skill.tasks = ['draft', 'continue', 'rewrite', 'plan']; state.skills.push(skill); project.skillIds = [skill.id];
-  const job = createJob(project, 'draft', config, [project.chapters[0].id], '保持本章事件'); job.skillIds = [...project.skillIds];
+  const job = createJob(project, 'draft', config, project.chapters[0].id, '保持本章事件'); job.skillIds = [...project.skillIds];
   return { state, project, config, skill, definition, job };
 }
 
@@ -55,7 +55,7 @@ describe('author-selected writing skills', () => {
 
   it('keeps distinct style evidence through every synthesis layer', () => {
     const { config } = setup(), state = emptyWorkspace(); config.contextChars = 6000;
-    const job = createJob(undefined, 'style', config, [], '');
+    const job = createJob(undefined, 'style', config, undefined, '');
     job.sourceText = '原文场景。'.repeat(1800); prepareAnalysis(job, config);
     const parts = job.steps.filter(step => step.intermediate);
     parts.forEach((step, index) => { step.status = 'ready'; step.output = `特色证据${index}：` + '幽默来自公开理由与实际行为的错位。'.repeat(50) + `[P${index + 1}]末尾证据`; });

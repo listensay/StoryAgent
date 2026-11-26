@@ -13,6 +13,7 @@ export const uid = () => crypto.randomUUID();
 export const now = () => new Date().toISOString();
 export const taskNames = { revise: '小说 AI', draft: '起草', continue: '续写', rewrite: '改写', review: '审稿', plan: '故事规划', memory: '提取记忆', scan: '扫榜选题', analyze: '拆文', style: '提取 Skill', prepare: '完善创作准备', summary: '生成摘要', train: 'Skill 训练', collect: '采集正文' } as const;
 export type TaskKind = keyof typeof taskNames;
+export const chapterWritingKinds: readonly TaskKind[] = ['draft', 'continue', 'rewrite', 'review', 'plan'];
 export const noteNames = { character: '人物', relation: '人物关系', world: '世界设定', volume: '卷纲', scene: '场景', branch: '情节分支', fact: '正文事实', state: '人物状态', timeline: '时间线', foreshadow: '伏笔', knowledge: '知情状态', reference: '参考资料' } as const;
 export type NoteKind = keyof typeof noteNames;
 const taskSchema = z.enum(Object.keys(taskNames) as [TaskKind, ...TaskKind[]]);
@@ -63,6 +64,7 @@ const collectionTaskSchema = z.object({ bookUrl: z.string(), title: z.string(), 
 const articleTaskSchema = z.object({ url: z.string(), rule: articleRuleSchema, mode: z.enum(['catalog', 'chapter', 'range']), page: articlePageSchema.optional(), links: z.array(z.object({ title: z.string(), url: z.string() })), referenceId: z.string(), done: z.number().int().nonnegative().default(0), total: z.number().int().nonnegative().default(0) });
 const jobSchema = z.object({
   clearedChatChapterIds: z.array(z.string()).optional(),
+  hiddenFromTaskList: z.boolean().optional(),
   id: z.string(), projectId: z.string(), kind: taskSchema, ai: z.preprocess(migrateLegacyEffort, aiConfigSchema).nullable(), styleId: z.string(), instruction: z.string(), targetWords: z.number().int().min(100).max(50000).optional(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['queued', 'running', 'paused', 'failed', 'ready', 'accepted', 'waiting']), error: z.string(), steps: z.array(stepSchema), preparationBase: z.string().optional(), skillTarget: z.object({ id: z.string(), snapshot: z.string() }).optional(), novelChat: z.object({ previousJobIds: z.array(z.string()), base: z.string(), before: z.string().optional(), appliedBase: z.string().optional(), undone: z.boolean().optional() }).optional(), planningChat: z.object({ previousJobIds: z.array(z.string()), base: z.string() }).optional(), skillIds: z.array(z.string()).optional(), training: trainingSchema.optional(), collectionTask: collectionTaskSchema.optional(), articleTask: articleTaskSchema.optional(), creationTask: creationTaskSchema.optional(), createdAt: z.string() });
 export const workspaceSchema = z.object({ schemaVersion: z.literal(2), proxy: proxySettingsSchema.default(defaultProxySettings), projects: z.array(projectSchema), providers: z.array(providerSchema), imageProviders: z.array(imageProviderSchema).default([]), imageSelection: imageSelectionSchema.default({ providerId: '', model: '' }), coverOptions: coverOptionsSchema.default(defaultCoverOptions), aiSelection: z.preprocess(migrateLegacyEffort, selectionSchema).default(newAISelection), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), articleRules: z.array(articleRuleSchema).default(() => structuredClone(defaultArticleRules)), articleRulesRevision: z.number().int().nonnegative().default(0), bookSearchHistory: z.array(z.string().trim().min(1).max(100)).max(BOOK_SEARCH_HISTORY_LIMIT).default([]), creationDraft: creationDraftSchema.optional(), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
 const legacyWorkspaceSchema = workspaceSchema.extend({ schemaVersion: z.literal(1), profiles: z.array(legacyProfileSchema), jobs: z.array(jobSchema.omit({ ai: true }).extend({ profileId: z.string() })) });
@@ -90,6 +92,23 @@ export const builtinSkills = [
   builtin('Skill 提炼', '提取叙事机制与表达规则', ['style'], '提取可执行的叙事机制：开篇钩子、人物欲望、冲突升级、信息差、情绪回报、反转、章节节奏、叙述视角、句法与对话。区分通用规律和题材适用条件，给出步骤、自检和反例。不得包含原作人物、专有设定、原文句子或特定章节答案。'),
 ];
 export const emptyWorkspace = (): Workspace => ({ schemaVersion: 2, proxy: defaultProxySettings(), projects: [], providers: [], imageProviders: [], imageSelection: { providerId: '', model: '' }, coverOptions: defaultCoverOptions(), aiSelection: newAISelection(), skills: structuredClone(builtinSkills), styles: [], references: [], articleRules: structuredClone(defaultArticleRules), articleRulesRevision: 1, bookSearchHistory: [], jobs: [], activeProjectId: '', updatedAt: now() });
+// Keep old range jobs usable without letting resume, retry or delete act on another chapter.
+function splitLegacyWritingJob(job: Job): Job[] {
+  if (!chapterWritingKinds.includes(job.kind) || job.creationTask || job.planningChat) return [job];
+  const groups = new Map<string, JobStep[]>();
+  for (const step of job.steps) {
+    const group = groups.get(step.chapterId);
+    if (group) group.push(step); else groups.set(step.chapterId, [step]);
+  }
+  if (groups.size < 2) return [job];
+  return Array.from(groups, ([chapterId, steps], index) => {
+    const complete = steps.every(step => step.status === 'ready' || step.status === 'accepted');
+    const accepted = steps.every(step => step.intermediate || step.status === 'accepted');
+    const status = !complete ? job.status : accepted ? 'accepted' : 'ready';
+    return { ...job, id: index ? uid() : job.id, steps, status, error: complete ? '' : job.error,
+      clearedChatChapterIds: job.clearedChatChapterIds?.filter(id => id === chapterId) };
+  });
+}
 export function parseWorkspace(raw: string): Workspace {
   let input = JSON.parse(raw);
   // Existing training history remains readable; every resumed evaluation is manual.
@@ -149,7 +168,7 @@ export function parseWorkspace(raw: string): Workspace {
     if (!data.skills.some(skill => skill.id === id)) data.skills.push({ id, name: style.name, description: '写作规则', source: style.source, version: '1.0', enabled: false, builtin: false, tasks: ['draft', 'continue', 'rewrite', 'plan'], files: [{ path: 'SKILL.md', content: style.content }], revisions: [] });
     for (const project of data.projects) if (project.styleId === style.id && !project.skillIds.includes(id)) project.skillIds.push(id);
   }
-  data.jobs = data.jobs.map(job => ['running', 'queued'].includes(job.status) ? { ...job, status: 'paused', steps: job.steps.map(step => step.status === 'running' ? { ...step, status: 'pending' } : step) } : job);
+  data.jobs = data.jobs.flatMap(splitLegacyWritingJob).map(job => ['running', 'queued'].includes(job.status) ? { ...job, status: 'paused', steps: job.steps.map(step => step.status === 'running' ? { ...step, status: 'pending' } : step) } : job);
   return data;
 }
 export const newChapter = (title = '第一章'): Chapter => ({ id: uid(), title, plan: '', content: '', summary: '', styleId: '', versions: [], updatedAt: now() });
@@ -236,10 +255,16 @@ export function validateAI(config: AIConfig, provider?: Provider): void {
   if (!selectionSchema.safeParse(config).success || !supportedEfforts(provider.protocol).includes(config.effort)) throw new Error('请选择有效的推理强度');
   validateAdvanced(config, provider.protocol);
 }
-export function createJob(project: Project | undefined, kind: TaskKind, ai: AIConfig | null, chapterIds: string[], instruction: string, styleId = '', sourceId = '', selection?: { start: number; end: number }): Job {
-  const chapters = project?.chapters.filter(c => chapterIds.includes(c.id)) ?? [];
-  const steps: JobStep[] = chapters.length ? chapters.map(c => ({ id: uid(), chapterId: c.id, title: c.title, status: 'pending', output: '', baseContent: c.content, basePlan: c.plan, selection: selection ? c.content.slice(selection.start, selection.end) : '', selectionStart: selection?.start ?? 0, selectionEnd: selection?.end ?? 0, section: '', aggregate: false, intermediate: false })) : [{ id: uid(), chapterId: '', title: taskNames[kind], status: 'pending', output: '', baseContent: '', basePlan: '', selection: '', selectionStart: 0, selectionEnd: 0, section: '', aggregate: false, intermediate: false }];
-  if (!chapters.length) steps[0].basePlan = project?.outline ?? '';
+export function createJob(project: Project | undefined, kind: TaskKind, ai: AIConfig | null, chapterId: string | undefined, instruction: string, styleId = '', sourceId = '', selection?: { start: number; end: number }): Job {
+  const chapter = project?.chapters.find(c => c.id === chapterId);
+  if (chapterId !== undefined && !chapter) throw new Error('章节已移除');
+  if (!chapter && ['draft', 'continue', 'rewrite', 'review'].includes(kind)) throw new Error('请先选择当前章节');
+  const steps: JobStep[] = [{
+    id: uid(), chapterId: chapter?.id ?? '', title: chapter?.title ?? taskNames[kind], status: 'pending', output: '',
+    baseContent: chapter?.content ?? '', basePlan: chapter?.plan ?? project?.outline ?? '',
+    selection: chapter && selection ? chapter.content.slice(selection.start, selection.end) : '', selectionStart: selection?.start ?? 0, selectionEnd: selection?.end ?? 0,
+    section: '', aggregate: false, intermediate: false,
+  }];
   return { id: uid(), projectId: project?.id ?? '', kind, ai: ai ? { ...ai } : null, styleId, instruction, sourceId, sourceText: '', sourceTitle: '', status: 'running', error: '', steps, createdAt: now() };
 }
 export function acceptedChapter(chapter: Chapter, job: Job, step: JobStep): Chapter {

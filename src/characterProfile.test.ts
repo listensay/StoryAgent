@@ -46,9 +46,9 @@ describe('完整人物档案', () => {
     const restored = parseWorkspace(JSON.stringify(state));
     expect(restored.projects[0].notes[0].body).toBe(body);
     const ai = { ...newAISelection(), ...defaultAdvanced(), contextChars: 60000 };
-    const job = createJob(project, 'draft', ai, [project.chapters[0].id], '');
+    const job = createJob(project, 'draft', ai, project.chapters[0].id, '');
     expect(buildPrompt(restored, job, job.steps[0], ai).user).toContain('口头禅：先留证据');
-    const revision = createJob(project, 'revise', ai, [], '补全人物');
+    const revision = createJob(project, 'revise', ai, undefined, '补全人物');
     expect(buildPrompt(restored, revision, revision.steps[0], ai).user).toContain('基础身份');
   });
 });

@@ -8,13 +8,13 @@ function setup() {
   const state = emptyWorkspace(), project = newProject('测试', 'long'); project.genre = '悬疑'; project.outline = '旧总纲';
   project.notes = [{ id: 'volume', kind: 'volume', title: '第一卷', body: '调查', chapterId: '', status: 'planned' }, { id: 'person', kind: 'character', title: '林舟', body: '调查员', chapterId: '', status: 'confirmed' }];
   state.projects.push(project);
-  const job = createJob(project, 'plan', ai, [], '强化第一卷悬念'); job.planningChat = { base: planningSnapshot(project), previousJobIds: [] }; state.jobs.unshift(job);
+  const job = createJob(project, 'plan', ai, undefined, '强化第一卷悬念'); job.planningChat = { base: planningSnapshot(project), previousJobIds: [] }; state.jobs.unshift(job);
   return { state, project, job, step: job.steps[0] };
 }
 describe('故事规划对话', () => {
   it('保存多轮对话，并把当前规划和前轮修改传给后续请求', () => {
     const { state, project, job } = setup(); job.status = 'ready'; job.steps[0].output = '{"reply":"先保留失踪线索"}';
-    const next = createJob(project, 'plan', ai, [], '将冲突延后'); next.planningChat = { base: planningSnapshot(project), previousJobIds: [job.id] }; state.jobs.unshift(next);
+    const next = createJob(project, 'plan', ai, undefined, '将冲突延后'); next.planningChat = { base: planningSnapshot(project), previousJobIds: [job.id] }; state.jobs.unshift(next);
     const restored = parseWorkspace(JSON.stringify(state)); expect(restored.jobs[0].planningChat).toEqual(next.planningChat);
     const prompt = buildPrompt(restored, next, next.steps[0], ai);
     expect(prompt.user).toContain('先保留失踪线索'); expect(prompt.user).toContain('强化第一卷悬念'); expect(prompt.user).toContain('将冲突延后'); expect(prompt.user).toContain('"id":"volume"');

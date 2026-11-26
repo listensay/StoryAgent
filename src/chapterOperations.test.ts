@@ -7,7 +7,7 @@ function setup() {
   const state = emptyWorkspace(), project = newProject('排序小说', 'long');
   project.chapters = ['甲章', '乙章', '丙章', '丁章'].map((title, index) => ({ ...newChapter(title), id: String(index), content: `${title}正文`, plan: `${title}计划`, summary: `${title}摘要`, versions: [{ id: `version-${index}`, content: `${title}旧正文`, createdAt: project.createdAt, label: '编辑前' }] }));
   state.projects.push(project);
-  state.jobs.push(createJob(project, 'draft', null, ['1'], '当前创作任务'));
+  state.jobs.push(createJob(project, 'draft', null, '1', '当前创作任务'));
   const note = (id: string, kind: Note['kind'], chapterId: string): Note => ({ id, kind, chapterId, title: id, body: '内容', status: 'confirmed' });
   project.notes = [note('fact', 'fact', '1'), note('scene', 'scene', '1'), note('reference', 'reference', '1'), note('other-fact', 'fact', '2')];
   return { state, project };

@@ -11,7 +11,7 @@ function setup() {
   project.chapters.push(newChapter('待移除章节'));
   project.notes.push({ id: 'hero', kind: 'character', title: '林舟', body: '原人物设定', chapterId: '', status: 'planned' }, { id: 'world', kind: 'world', title: '旧世界', body: '原世界规则', chapterId: '', status: 'planned' });
   state.projects.push(project);
-  const job = createJob(project, 'revise', null, [], '调整小说');
+  const job = createJob(project, 'revise', null, undefined, '调整小说');
   job.novelChat = { base: novelSnapshot(project), before: novelBefore(project), previousJobIds: [] };
   job.steps[0].output = JSON.stringify({ reply: '完成调整', project: { title: '新书名', outline: '保留的开篇\n新转折\n保留的结尾' }, notes: [{ id: 'hero', kind: 'character', title: '陆昭', body: '新人物设定' }, { kind: 'world', title: '新世界', body: '新世界规则' }], chapters: [{ id: project.chapters[0].id, plan: '' }], removeNoteIds: ['world'], removeChapterIds: [project.chapters[1].id] });
   state.jobs.push(job);

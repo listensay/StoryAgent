@@ -81,7 +81,7 @@ describe('人物关系解析与布局', () => {
 describe('AI 生成关系采用与上下文', () => {
   it('先保存人物再关联关系，不合并不同双方的同名关系，并让写作获得双方姓名', () => {
     const state = emptyWorkspace(), project = newProject('测试', 'long'); project.genre = '悬疑'; state.projects.push(project);
-    const job = createJob(project, 'prepare', { ...newAISelection(), ...defaultAdvanced() }, [], ''); job.preparationBase = preparationSnapshot(project);
+    const job = createJob(project, 'prepare', { ...newAISelection(), ...defaultAdvanced() }, undefined, ''); job.preparationBase = preparationSnapshot(project);
     job.steps[0].output = JSON.stringify({ theme: '', audience: '', synopsis: '', outline: '', notes: [
       { kind: 'relation', title: '同伴', body: '共同调查', source: '林舟', target: '许宁' },
       ...characters().map(note => ({ kind: note.kind, title: note.title, body: note.body })),
@@ -98,7 +98,7 @@ describe('AI 生成关系采用与上下文', () => {
   });
   it('仅调整人物图位置不阻止采用，编辑人物设定仍会阻止采用', () => {
     const state = emptyWorkspace(), project = newProject('测试', 'long'); state.projects.push(project); project.notes = characters();
-    const job = createJob(project, 'prepare', { ...newAISelection(), ...defaultAdvanced() }, [], ''); job.preparationBase = preparationSnapshot(project);
+    const job = createJob(project, 'prepare', { ...newAISelection(), ...defaultAdvanced() }, undefined, ''); job.preparationBase = preparationSnapshot(project);
     job.steps[0].output = '{"theme":"主题","audience":"","synopsis":"","outline":"","notes":[]}';
     project.notes[0].graphPosition = { x: 100, y: 200 };
     expect(() => acceptPreparation(state, job, job.steps[0])).not.toThrow();

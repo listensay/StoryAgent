@@ -11,7 +11,7 @@ function setup() {
   project.notes = [note('hero', 'character', '沈游'), note('singer', 'character', '苏云裳'), { ...note('relation', 'relation', '合作'), relation: { sourceId: 'hero', targetId: 'singer' } }, note('world', 'world', '系统'), note('volume', 'volume', '旧卷纲'), note('fact', 'fact', '正文事实')];
   project.chapters[0].content = '原正文'; project.chapters[0].summary = '原摘要';
   state.projects.push(project);
-  const job = createJob(project, 'revise', ai, [], '按新总纲更新所有内容');
+  const job = createJob(project, 'revise', ai, undefined, '按新总纲更新所有内容');
   job.novelChat = { previousJobIds: [], base: novelSnapshot(project) }; state.jobs.push(job);
   return { state, project, job };
 }
@@ -91,14 +91,14 @@ describe('小说 AI 联动更新', () => {
     const chapter = newChapter('生成中的章节'); project.chapters.push(chapter);
     job.novelChat!.base = novelSnapshot(project);
     job.steps[0].output = JSON.stringify({ reply: '移除旧章节', removeChapterIds: [chapter.id] });
-    const writing = createJob(project, kind, ai, [chapter.id], '章节任务'); state.jobs.push(writing);
+    const writing = createJob(project, kind, ai, chapter.id, '章节任务'); state.jobs.push(writing);
     expect(() => acceptNovel(state, job)).toThrow('正在生成');
     expect(project.chapters).toContain(chapter);
     writing.status = 'paused';
     job.steps[0].output = JSON.stringify({ reply: '新增章节', chapters: [{ title: '新增计划', plan: '计划' }] });
     acceptNovel(state, job); job.status = 'accepted';
     const added = project.chapters[project.chapters.length - 1];
-    state.jobs.push(createJob(project, kind, ai, [added.id], '新章节任务'));
+    state.jobs.push(createJob(project, kind, ai, added.id, '新章节任务'));
     const original = structuredClone(state);
     expect(() => undoNovel(state, job)).toThrow('正在生成');
     expect(state).toEqual(original);
@@ -223,7 +223,7 @@ describe('小说 AI 联动更新', () => {
   it('完整加载内置操作 Skill、角色、卷纲和未采用方案，讨论不产生修改', () => {
     const { state, project, job } = setup(); job.steps[0].output = '{"reply":"先讨论主线"}'; job.status = 'accepted';
     state.skills = []; // Required interface instructions do not depend on skill toggles.
-    const next = createJob(project, 'revise', ai, [], '继续调整'); next.novelChat = { base: novelSnapshot(project), previousJobIds: [job.id] };
+    const next = createJob(project, 'revise', ai, undefined, '继续调整'); next.novelChat = { base: novelSnapshot(project), previousJobIds: [job.id] };
     const prompt = buildPrompt(state, next, next.steps[0], ai);
     expect(prompt.system).toContain('removeNoteIds'); expect(prompt.system).toContain('removeChapterIds'); expect(prompt.system).toContain('source');
     project.chapters.push(newChapter('可移除章节'));

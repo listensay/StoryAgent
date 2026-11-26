@@ -9,6 +9,7 @@ import { exportFile, pickFiles } from './platform';
 import { Projects } from './pages/Projects';
 import './App.css';
 import { TaskList } from './TaskList';
+import { clearFinishedTasksFromList } from './taskQueue';
 import { openWriting } from './jobWorkflow';
 import { AppUpdateButton } from './AppUpdateButton';
 
@@ -58,7 +59,7 @@ function App() {
   return <AppShell navbar={{ width: 220, breakpoint: 'sm', collapsed: { mobile: !navOpened } }} padding={0}>
     <AppShell.Navbar p="sm">
       <Group justify="space-between" mb="lg" px="xs" pt="sm">
-        <TaskList jobs={store.state.jobs} onOpen={openTask} />
+        <TaskList jobs={store.state.jobs} onOpen={openTask} onClearFinished={() => store.update(s => clearFinishedTasksFromList(s.jobs))} />
         <Box hiddenFrom="sm"><IconButton icon={X} label="关闭导航" onClick={() => setNavOpened(false)} /></Box>
       </Group>
       <AppShell.Section grow component={ScrollArea}>

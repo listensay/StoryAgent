@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createJob, defaultAdvanced, emptyWorkspace, newChapter, newProject, type Workspace } from './domain';
+import { chapterWritingKinds, createJob, defaultAdvanced, emptyWorkspace, newChapter, newProject, type Workspace } from './domain';
 import { contentHash } from './jobWorkflow';
 import { generate } from './ai';
 import { loadWorkspace, saveWorkspace } from './platform';
@@ -41,6 +41,33 @@ beforeEach(() => {
   vi.mocked(loadWorkspace).mockResolvedValue(state); vi.mocked(saveWorkspace).mockResolvedValue();
 });
 afterEach(() => { cleanups.forEach(cleanup => cleanup()); vi.useRealTimers(); });
+
+describe('当前章节任务与列表清空', () => {
+  it.each(chapterWritingKinds)('%s 只为选中的当前章节生成步骤', kind => {
+    mount(); const project = store.stateRef.current.projects[0]; project.genre = '悬疑';
+    const chapter = project.chapters[1];
+    const id = store.launch({ kind, projectId: project.id, chapterId: chapter.id, instruction: '测试要求' });
+    const job = store.stateRef.current.jobs.find(value => value.id === id)!;
+    expect(job.status).toBe('queued');
+    expect(job.steps.every(step => step.chapterId === chapter.id)).toBe(true);
+    expect(store.stateRef.current.projects[0].chapters).toEqual(project.chapters);
+  });
+  it.each(chapterWritingKinds)('%s 缺少或移除当前章节时不创建任务', kind => {
+    mount(); const project = store.stateRef.current.projects[0]; project.genre = '悬疑';
+    expect(() => store.launch({ kind, projectId: project.id })).toThrow('当前章节');
+    expect(() => store.launch({ kind, projectId: project.id, chapterId: 'missing' })).toThrow('章节已移除');
+    expect(store.stateRef.current.jobs).toEqual([]);
+  });
+  it('恢复隐藏的失败任务时重新显示，仅恢复它所属的章节', () => {
+    mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[1]; project.genre = '悬疑';
+    const id = store.launch({ kind: 'draft', projectId: project.id, chapterId: chapter.id });
+    store.update(state => { const job = state.jobs.find(value => value.id === id)!; job.status = 'failed'; job.hiddenFromTaskList = true; });
+    store.resumeJob(id);
+    const job = store.stateRef.current.jobs.find(value => value.id === id)!;
+    expect(job.hiddenFromTaskList).toBeUndefined(); expect(job.status).toBe('queued');
+    expect(job.steps.every(step => step.chapterId === chapter.id)).toBe(true);
+  });
+});
 
 describe('正文保存与记忆提取', () => {
   it('编辑后的自动保存写入正文，等待超过十秒也不提取任何章节的记忆', async () => {
@@ -92,7 +119,7 @@ describe('正文保存与记忆提取', () => {
   });
   it.each(['failed', 'paused'] as const)('再次保存可重新提取此前%s的记忆', async status => {
     mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
-    const job = createJob(project, 'memory', null, [chapter.id], ''); job.status = status;
+    const job = createJob(project, 'memory', null, chapter.id, ''); job.status = status;
     store.update(state => { state.jobs.push(job); });
     await store.saveChapter(project.id, chapter.id);
     expect(store.stateRef.current.jobs).toHaveLength(2); expect(store.stateRef.current.jobs[0].status).toBe('queued');
@@ -101,7 +128,7 @@ describe('正文保存与记忆提取', () => {
     mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
     if (condition === 'empty') chapter.content = '  ';
     if (condition === 'current') chapter.memoryHash = contentHash(chapter.content);
-    if (condition === 'writing') { const job = createJob(project, 'draft', null, [chapter.id], ''); job.status = 'running'; store.stateRef.current.jobs.push(job); }
+    if (condition === 'writing') { const job = createJob(project, 'draft', null, chapter.id, ''); job.status = 'running'; store.stateRef.current.jobs.push(job); }
     await store.saveChapter(project.id, chapter.id);
     expect(saveWorkspace).toHaveBeenCalled(); expect(store.stateRef.current.jobs.some(job => job.kind === 'memory')).toBe(false);
   });
@@ -149,7 +176,7 @@ describe('正文内润色', () => {
   });
   it('阻止重复润色和同时恢复本章写作任务', async () => {
     mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
-    const job = createJob(project, 'rewrite', null, [chapter.id], ''); job.status = 'paused'; store.stateRef.current.jobs.push(job);
+    const job = createJob(project, 'rewrite', null, chapter.id, ''); job.status = 'paused'; store.stateRef.current.jobs.push(job);
     let finish!: (value: string) => void;
     vi.mocked(generate).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const pending = store.polishChapter(project.id, chapter.id, selection(chapter.content));
@@ -164,7 +191,7 @@ describe('正文内润色', () => {
   });
   it('本章已有写作任务时拒绝润色', async () => {
     mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
-    store.stateRef.current.jobs.push(createJob(project, 'draft', null, [chapter.id], ''));
+    store.stateRef.current.jobs.push(createJob(project, 'draft', null, chapter.id, ''));
     await expect(store.polishChapter(project.id, chapter.id, selection(chapter.content))).rejects.toThrow();
     expect(generate).not.toHaveBeenCalled();
   });

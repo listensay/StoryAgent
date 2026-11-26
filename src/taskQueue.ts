@@ -1,5 +1,11 @@
 import type { Job, Provider } from './domain';
 
+export const isFinishedTask = (job: Job) => job.status === 'accepted' || job.status === 'failed';
+
+export function clearFinishedTasksFromList(jobs: Job[]) {
+  for (const job of jobs) if (isFinishedTask(job)) job.hiddenFromTaskList = true;
+}
+
 export function runnableJobs(jobs: Job[], providers: Provider[], active: Set<string>): string[] {
   const counts = new Map<string, number>();
   for (const job of jobs) if (active.has(job.id)) { const key = job.ai?.providerId ?? 'collection'; counts.set(key, (counts.get(key) ?? 0) + 1); }
