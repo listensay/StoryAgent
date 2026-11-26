@@ -27,7 +27,6 @@ describe('desktop updates', () => {
     await controller.check();
     expect(controller.getSnapshot()).toMatchObject({ status: 'available', currentVersion: '0.1.0', version: '0.2.0' });
     expect(update.download).not.toHaveBeenCalled();
-    await controller.check();
     expect(dependencies.check).toHaveBeenCalledTimes(1);
   });
 
@@ -228,17 +227,53 @@ describe('desktop updates', () => {
     expect(update.download).not.toHaveBeenCalled();
   });
 
-  it('checks at startup and every six hours, and clears timers on stop', async () => {
+  it('checks at startup, on return and every minute without duplicate focus requests', async () => {
     vi.useFakeTimers();
     const { controller, dependencies } = fixture();
     vi.mocked(dependencies.check).mockResolvedValue(null);
     controller.start();
-    await vi.advanceTimersByTimeAsync(2500);
+    controller.start();
+    await vi.advanceTimersByTimeAsync(0);
     expect(dependencies.check).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000 - 2500);
+    controller.refresh();
+    expect(dependencies.check).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    controller.refresh(); controller.refresh();
     expect(dependencies.check).toHaveBeenCalledTimes(2);
+    vi.mocked(dependencies.check).mockResolvedValue(fixture().update);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(controller.getSnapshot().status).toBe('available');
     controller.stop();
-    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
-    expect(dependencies.check).toHaveBeenCalledTimes(2);
+    controller.refresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(dependencies.check).toHaveBeenCalledTimes(3);
+  });
+
+  it('retains a known release on network failure and replaces it when a newer one arrives', async () => {
+    const { controller, dependencies, update } = fixture();
+    await controller.check();
+    vi.mocked(dependencies.check).mockRejectedValueOnce(new Error('offline'));
+    await controller.check(true);
+    expect(controller.getSnapshot()).toMatchObject({ status: 'available', version: update.version });
+    const newer = { ...fixture().update, version: '0.3.0' };
+    vi.mocked(dependencies.check).mockResolvedValue(newer);
+    await controller.check(true);
+    expect(controller.getSnapshot().version).toBe(newer.version);
+    expect(update.close).toHaveBeenCalledOnce();
+    expect(newer.download).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a package being installed during a background check', async () => {
+    const { controller, dependencies, update } = fixture();
+    await controller.check();
+    let resolve!: (value: UpdateHandle) => void;
+    vi.mocked(dependencies.check).mockReturnValue(new Promise(done => { resolve = done; }));
+    const check = controller.check(true);
+    await controller.activate();
+    const newer = fixture().update;
+    resolve(newer); await check;
+    expect(controller.getSnapshot().status).toBe('restarting');
+    expect(newer.close).toHaveBeenCalledOnce();
+    expect(update.install).toHaveBeenCalledOnce();
   });
 });

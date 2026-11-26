@@ -1,5 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Accordion, Badge, Button, Group, List, Loader, Modal, Progress, ScrollArea, Stack, Text, Tooltip } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Download, History, RefreshCw, X } from './icons';
 import { createAppUpdater, updatePercent, type UpdateState } from './appUpdate';
 import { updateRecords } from './releaseNotes';
@@ -26,8 +28,27 @@ export function AppUpdateButton({ store, onVersion }: { store: Store; onVersion:
   const [controller] = useState(() => createAppUpdater({ canRestart: store.canUpdate, prepareRestart: store.prepareUpdate, releaseRestart: store.cancelUpdate }));
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [opened, setOpened] = useState(false);
-  useEffect(() => { if (!store.loaded) return; controller.start(); return () => controller.stop(); }, [controller, store.loaded]);
+  const announced = useRef('');
+  useEffect(() => {
+    if (!store.loaded) return;
+    controller.start();
+    let disposed = false;
+    const focusListener = getCurrentWindow().onFocusChanged(({ payload }) => { if (payload && !disposed) controller.refresh(); }).catch(() => undefined);
+    const reconnect = () => { void controller.check(true); };
+    window.addEventListener('online', reconnect);
+    return () => {
+      disposed = true;
+      void focusListener.then(unlisten => unlisten?.());
+      window.removeEventListener('online', reconnect);
+      controller.stop();
+    };
+  }, [controller, store.loaded]);
   useEffect(() => { if (state.currentVersion) onVersion(state.currentVersion); }, [state.currentVersion, onVersion]);
+  useEffect(() => {
+    if (state.status !== 'available' || announced.current === state.version) return;
+    announced.current = state.version;
+    if (!opened) notifications.show({ title: `发现新版本 ${state.version}`, message: updateRecords(state)[0]?.changes[0] || '可在更新记录中查看。', autoClose: 10000, closeButtonProps: { icon: <X size={18} />, 'aria-label': '关闭更新提示' } });
+  }, [state, opened]);
   const installing = state.status === 'installing' || state.status === 'restarting';
   const loading = state.status === 'checking' || state.status === 'downloading' || installing;
   const title = state.error || (state.version ? `StoryAgent ${state.currentVersion} → ${state.version}` : state.currentVersion ? `StoryAgent ${state.currentVersion}` : '检查更新');

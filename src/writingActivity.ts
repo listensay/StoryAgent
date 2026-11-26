@@ -4,6 +4,17 @@ const stageNames: Record<string, string> = { plan: '细纲', draft: '正文', co
 
 export const writingStageName = (job: Job, step: JobStep) => stageNames[step.stage ?? ''] ?? taskNames[job.kind];
 
+export const canClearWritingChat = (job: Job) => !['running', 'queued', 'waiting'].includes(job.status);
+
+export function clearWritingChat(jobs: Job[], chapterId: string, selectedIds: string[]) {
+  const selected = new Set(selectedIds);
+  for (const job of jobs) {
+    if (selected.has(job.id) && canClearWritingChat(job) && job.steps.some(step => step.chapterId === chapterId) && !job.clearedChatChapterIds?.includes(chapterId)) {
+      (job.clearedChatChapterIds ??= []).push(chapterId);
+    }
+  }
+}
+
 export function writingSkillFiles(execution: NonNullable<JobStep['execution']>['skills'][number], skills: Skill[]) {
   if (execution.contents) return execution.contents;
   const skill = skills.find(skill => skill.id === execution.id);

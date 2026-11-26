@@ -28,6 +28,8 @@ export class AppUpdateController {
   private downloaded = false;
   private installed = false;
   private busy = false;
+  private checking = false;
+  private lastCheck = -Infinity;
   private epoch = 0;
   private timers: ReturnType<typeof setTimeout>[] = [];
 
@@ -40,36 +42,46 @@ export class AppUpdateController {
   }
 
   start() {
-    this.timers.push(setTimeout(() => void this.check(), 2500));
-    this.timers.push(setInterval(() => void this.check(), 6 * 60 * 60 * 1000));
+    if (this.timers.length) return;
+    this.timers.push(setTimeout(this.refresh, 0));
+    this.timers.push(setInterval(this.refresh, 60_000));
     this.timers.push(setInterval(() => { if (this.state.status === 'waiting') void this.install(); }, 1000));
   }
+  refresh = () => {
+    if (this.timers.length && Date.now() - this.lastCheck >= 15_000) void this.check(true);
+  };
   stop() {
     this.epoch++;
     this.timers.forEach(clearTimeout); this.timers = [];
     if (!this.busy) void this.update?.close().catch(() => {});
-    this.update = undefined; this.busy = false;
+    this.update = undefined; this.busy = false; this.checking = false; this.lastCheck = -Infinity;
     this.downloaded = false; this.installed = false;
     this.dependencies.releaseRestart();
   }
 
-  async check() {
-    if (this.busy || this.update) return;
+  async check(background = false) {
+    if (this.busy || this.checking || (this.update && this.state.status !== 'available')) return;
     const epoch = this.epoch;
-    this.busy = true; this.publish({ status: 'checking', error: '' });
+    this.checking = true; this.lastCheck = Date.now();
+    if (!this.update && (!background || this.state.status === 'idle')) this.publish({ status: 'checking', error: '' });
     try {
-      const currentVersion = await this.dependencies.getVersion();
+      const currentVersion = this.state.currentVersion || await this.dependencies.getVersion();
       if (epoch !== this.epoch) return;
-      this.publish({ currentVersion });
+      if (!this.state.currentVersion) this.publish({ currentVersion });
       const update = await this.dependencies.check();
-      if (epoch !== this.epoch) { if (update !== 'unpublished') await update?.close(); return; }
+      if (epoch !== this.epoch || this.busy || (this.update && this.state.status !== 'available')) {
+        if (update && update !== 'unpublished') await update.close();
+        return;
+      }
+      const previous = this.update;
       this.update = update === 'unpublished' ? undefined : update ?? undefined;
+      if (previous && previous !== this.update) void previous.close().catch(() => {});
       let releases: ChangelogEntry[] = [];
       try { if (this.update?.rawJson?.changelog) releases = validateChangelog(this.update.rawJson.changelog); } catch { /* Older or malformed manifests can still supply release notes. */ }
-      this.publish({ status: update === 'unpublished' ? 'unpublished' : update ? 'available' : 'current', currentVersion, version: this.update?.version ?? '', notes: this.update?.body ?? '', releases });
+      this.publish({ status: update === 'unpublished' ? 'unpublished' : update ? 'available' : 'current', currentVersion, version: this.update?.version ?? '', notes: this.update?.body ?? '', releases, error: '' });
     } catch (error) {
-      if (epoch === this.epoch) this.publish({ status: 'error', error: updateCheckError(error) });
-    } finally { if (epoch === this.epoch) this.busy = false; }
+      if (epoch === this.epoch && !this.update) this.publish({ status: 'error', error: updateCheckError(error) });
+    } finally { if (epoch === this.epoch) this.checking = false; }
   }
 
   async activate() {

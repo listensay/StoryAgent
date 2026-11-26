@@ -1,10 +1,11 @@
 import { MantineProvider } from '@mantine/core';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { createJob, emptyWorkspace, newChapter, newProject } from './domain';
+import { createJob, emptyWorkspace, newChapter, newProject, parseWorkspace } from './domain';
 import { prepareWriting } from './jobWorkflow';
 import { Writing } from './pages/Writing';
 import { WritingChat } from './WritingChat';
+import { clearWritingChat } from './writingActivity';
 import { type Store } from './useWorkspace';
 
 function setup() {
@@ -17,6 +18,24 @@ function setup() {
 }
 
 describe('writing chat entry and results', () => {
+  it('clears only selected inactive conversations in one chapter and retains their results after reload', () => {
+    const { project, job, store } = setup();
+    const [first, second] = project.chapters;
+    const batch = createJob(project, 'review', null, [first.id, second.id], '两章共有的要求');
+    batch.status = 'ready'; batch.steps.forEach(step => { step.output = '保留的审稿意见'; step.status = 'ready'; });
+    store.state.jobs.push(batch);
+    clearWritingChat(store.state.jobs, first.id, [batch.id, job.id]);
+    store.state = parseWorkspace(JSON.stringify(store.state));
+    const render = (chapterId: string, focusJobId?: string) => renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} focusChapterId={chapterId} focusJobId={focusJobId} onSettings={vi.fn()} /></MantineProvider>);
+    expect(render(first.id)).not.toContain(batch.instruction);
+    expect(render(first.id)).toContain(job.instruction);
+    expect(render(second.id)).toContain(batch.instruction);
+    expect(render(first.id, batch.id)).toContain('生成稿内容');
+    expect(render(first.id, batch.id)).toContain('保留的审稿意见');
+    const next = createJob(project, 'continue', null, [first.id], '清空后的新任务');
+    store.state.jobs.unshift(next);
+    expect(render(first.id)).toContain(next.instruction);
+  });
   it('shows only the current chapter requests and outputs', () => {
     const { project, job, store } = setup();
     job.status = 'ready'; job.steps.forEach(step => { step.status = 'ready'; step.output = '第一轮生成内容'; });
