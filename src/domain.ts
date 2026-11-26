@@ -26,9 +26,15 @@ export const DEFAULT_AI_RETRIES = 10;
 export const MAX_AI_RETRIES = 100;
 const retryCountSchema = z.number().int().min(0).max(MAX_AI_RETRIES);
 const providerSchema = z.object({ id: z.string(), name: z.string(), protocol: z.enum(['chat', 'responses', 'anthropic', 'gemini']), baseUrl: z.string(), hasKey: z.boolean(), models: z.array(z.string()), enabled: z.boolean(), concurrency: z.number().int().min(1).max(16).optional(), maxRetries: retryCountSchema.default(DEFAULT_AI_RETRIES), advanced: advancedSchema.default(defaultAdvanced) });
-const selectionSchema = z.object({ providerId: z.string(), model: z.string(), reasoning: z.enum(['off', 'effort', 'budget', 'adaptive']), effort: z.enum(['low', 'medium', 'high', 'xhigh']), budget: z.number().int().min(1024) });
+const effortValues = ['default', 'low', 'medium', 'high', 'xhigh'] as const;
+const selectionSchema = z.object({ providerId: z.string(), model: z.string(), effort: z.enum(effortValues) });
 const aiConfigSchema = selectionSchema.extend(advancedSchema.shape);
-const legacyProfileSchema = aiConfigSchema.extend({ id: z.string(), name: z.string(), tasks: z.array(taskSchema) });
+// Old modes stored an unused effort alongside the active mode. Only an explicitly selected effort carries over.
+function migrateLegacyEffort(value: unknown) {
+  if (value && typeof value === 'object' && 'reasoning' in value && value.reasoning !== 'effort') return { ...value, effort: 'default' };
+  return value;
+}
+const legacyProfileSchema = z.preprocess(migrateLegacyEffort, aiConfigSchema.extend({ id: z.string(), name: z.string(), tasks: z.array(taskSchema) }));
 const skillFileSchema = z.object({ path: z.string(), content: z.string() });
 const skillSchema = z.object({ originReferenceId: z.string().optional(), extractionJobId: z.string().optional(), resourceMode: z.literal('relevant').optional(), id: z.string(), name: z.string(), description: z.string(), source: z.string(), version: z.string(), enabled: z.boolean(), builtin: z.boolean(), tasks: z.array(taskSchema), files: z.array(skillFileSchema), revisions: z.array(z.object({ version: z.string(), files: z.array(skillFileSchema), savedAt: z.string() })).default([]) });
 const styleSchema = z.object({ id: z.string(), name: z.string(), content: z.string(), source: z.string(), createdAt: z.string() });
@@ -55,8 +61,8 @@ export const trainingSchema = z.object({
 }).refine(value => value.cases.length >= 1 || !!value.original?.trim(), { message: '请选择原文章节' });
 const collectionTaskSchema = z.object({ bookUrl: z.string(), title: z.string(), scope: z.enum(['opening', 'chapter', 'available']), chapterId: z.string(), rule: articleRuleSchema.optional(), referenceId: z.string(), done: z.number().default(0), total: z.number().default(0) });
 const articleTaskSchema = z.object({ url: z.string(), rule: articleRuleSchema, mode: z.enum(['catalog', 'chapter', 'range']), page: articlePageSchema.optional(), links: z.array(z.object({ title: z.string(), url: z.string() })), referenceId: z.string(), done: z.number().int().nonnegative().default(0), total: z.number().int().nonnegative().default(0) });
-const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, ai: aiConfigSchema.nullable(), styleId: z.string(), instruction: z.string(), targetWords: z.number().int().min(100).max(50000).optional(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['queued', 'running', 'paused', 'failed', 'ready', 'accepted', 'waiting']), error: z.string(), steps: z.array(stepSchema), preparationBase: z.string().optional(), skillTarget: z.object({ id: z.string(), snapshot: z.string() }).optional(), novelChat: z.object({ previousJobIds: z.array(z.string()), base: z.string(), before: z.string().optional(), appliedBase: z.string().optional(), undone: z.boolean().optional() }).optional(), planningChat: z.object({ previousJobIds: z.array(z.string()), base: z.string() }).optional(), skillIds: z.array(z.string()).optional(), training: trainingSchema.optional(), collectionTask: collectionTaskSchema.optional(), articleTask: articleTaskSchema.optional(), creationTask: creationTaskSchema.optional(), createdAt: z.string() });
-export const workspaceSchema = z.object({ schemaVersion: z.literal(2), proxy: proxySettingsSchema.default(defaultProxySettings), projects: z.array(projectSchema), providers: z.array(providerSchema), imageProviders: z.array(imageProviderSchema).default([]), imageSelection: imageSelectionSchema.default({ providerId: '', model: '' }), coverOptions: coverOptionsSchema.default(defaultCoverOptions), aiSelection: selectionSchema.default(newAISelection), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), articleRules: z.array(articleRuleSchema).default(() => structuredClone(defaultArticleRules)), articleRulesRevision: z.number().int().nonnegative().default(0), bookSearchHistory: z.array(z.string().trim().min(1).max(100)).max(BOOK_SEARCH_HISTORY_LIMIT).default([]), creationDraft: creationDraftSchema.optional(), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
+const jobSchema = z.object({ id: z.string(), projectId: z.string(), kind: taskSchema, ai: z.preprocess(migrateLegacyEffort, aiConfigSchema).nullable(), styleId: z.string(), instruction: z.string(), targetWords: z.number().int().min(100).max(50000).optional(), sourceId: z.string(), sourceText: z.string().default(''), sourceTitle: z.string().default(''), status: z.enum(['queued', 'running', 'paused', 'failed', 'ready', 'accepted', 'waiting']), error: z.string(), steps: z.array(stepSchema), preparationBase: z.string().optional(), skillTarget: z.object({ id: z.string(), snapshot: z.string() }).optional(), novelChat: z.object({ previousJobIds: z.array(z.string()), base: z.string(), before: z.string().optional(), appliedBase: z.string().optional(), undone: z.boolean().optional() }).optional(), planningChat: z.object({ previousJobIds: z.array(z.string()), base: z.string() }).optional(), skillIds: z.array(z.string()).optional(), training: trainingSchema.optional(), collectionTask: collectionTaskSchema.optional(), articleTask: articleTaskSchema.optional(), creationTask: creationTaskSchema.optional(), createdAt: z.string() });
+export const workspaceSchema = z.object({ schemaVersion: z.literal(2), proxy: proxySettingsSchema.default(defaultProxySettings), projects: z.array(projectSchema), providers: z.array(providerSchema), imageProviders: z.array(imageProviderSchema).default([]), imageSelection: imageSelectionSchema.default({ providerId: '', model: '' }), coverOptions: coverOptionsSchema.default(defaultCoverOptions), aiSelection: z.preprocess(migrateLegacyEffort, selectionSchema).default(newAISelection), skills: z.array(skillSchema), styles: z.array(styleSchema), references: z.array(referenceSchema), articleRules: z.array(articleRuleSchema).default(() => structuredClone(defaultArticleRules)), articleRulesRevision: z.number().int().nonnegative().default(0), bookSearchHistory: z.array(z.string().trim().min(1).max(100)).max(BOOK_SEARCH_HISTORY_LIMIT).default([]), creationDraft: creationDraftSchema.optional(), jobs: z.array(jobSchema), activeProjectId: z.string(), updatedAt: z.string() });
 const legacyWorkspaceSchema = workspaceSchema.extend({ schemaVersion: z.literal(1), profiles: z.array(legacyProfileSchema), jobs: z.array(jobSchema.omit({ ai: true }).extend({ profileId: z.string() })) });
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type Project = z.infer<typeof projectSchema>;
@@ -176,12 +182,15 @@ export function importChapters(text: string): Chapter[] {
 export function exportNovel(project: Project, format: 'txt' | 'md'): string {
   return [format === 'md' ? `# ${project.title}` : project.title, ...project.chapters.map(c => `${format === 'md' ? '## ' : ''}${c.title}\n\n${c.content}`)].join('\n\n');
 }
-export function newAISelection(): AISelection { return { providerId: '', model: '', reasoning: 'off', effort: 'medium', budget: 2048 }; }
+export function newAISelection(): AISelection { return { providerId: '', model: '', effort: 'default' }; }
+export function supportedEfforts(protocol?: Provider['protocol']): readonly AISelection['effort'][] {
+  return protocol === 'chat' || protocol === 'responses' ? effortValues : effortValues.filter(effort => effort !== 'xhigh');
+}
 export function normalizeAISelection(selection: AISelection, providers: Provider[]): AISelection {
   const provider = providers.find(p => p.id === selection.providerId && p.enabled && p.models.length);
   if (!provider) return { ...selection, providerId: '', model: '' };
-  const reasoning = (provider.protocol === 'anthropic' && selection.reasoning === 'effort') || (['chat', 'responses'].includes(provider.protocol) && ['budget', 'adaptive'].includes(selection.reasoning)) ? 'off' : selection.reasoning;
-  return { ...selection, model: provider.models.includes(selection.model) ? selection.model : '', reasoning, effort: provider.protocol === 'gemini' && selection.effort === 'xhigh' ? 'high' : selection.effort };
+  const effort = supportedEfforts(provider.protocol).includes(selection.effort) ? selection.effort : 'high';
+  return { ...selection, model: provider.models.includes(selection.model) ? selection.model : '', effort };
 }
 export function resolveAI(selection: AISelection, providers: Provider[]): AIConfig {
   const provider = providers.find(p => p.id === selection.providerId);
@@ -197,6 +206,11 @@ function validateAdvanced(advanced: Provider['advanced'], protocol: Provider['pr
   if (!extra || typeof extra !== 'object' || Array.isArray(extra)) throw new Error('附加参数须为 JSON 对象');
   for (const key of ['model', 'messages', 'input', 'contents', 'system', 'systemInstruction', 'instructions', 'stream', 'tools', 'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'temperature', 'reasoning', 'reasoning_effort', 'thinking']) {
     if (key in extra) throw new Error(`附加参数不能覆盖 ${key}`);
+  }
+  if (protocol === 'anthropic' && 'output_config' in extra) {
+    const config = extra.output_config;
+    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('output_config 须为 JSON 对象');
+    if ('effort' in config) throw new Error('附加参数不能覆盖推理强度');
   }
   if ('generationConfig' in extra) {
     const config = extra.generationConfig;
@@ -217,12 +231,8 @@ export function validateProvider(provider: Provider): void {
 export function validateAI(config: AIConfig, provider?: Provider): void {
   if (!provider || !provider.enabled || provider.id !== config.providerId) throw new Error('请选择可用的 AI 供应商');
   if (!config.model || !provider.models.includes(config.model)) throw new Error('请选择供应商中已配置的模型');
-  if (!selectionSchema.safeParse(config).success) throw new Error('请检查推理设置，推理预算至少为 1024');
+  if (!selectionSchema.safeParse(config).success || !supportedEfforts(provider.protocol).includes(config.effort)) throw new Error('请选择有效的推理强度');
   validateAdvanced(config, provider.protocol);
-  if (provider.protocol === 'anthropic' && config.reasoning === 'budget' && config.budget >= config.maxTokens) throw new Error('推理预算须小于供应商的输出上限');
-  if (['chat', 'responses'].includes(provider.protocol) && ['budget', 'adaptive'].includes(config.reasoning)) throw new Error('该协议使用推理强度设置');
-  if (provider.protocol === 'anthropic' && config.reasoning === 'effort') throw new Error('该协议使用推理预算或自适应推理');
-  if (provider.protocol === 'gemini' && config.reasoning === 'effort' && config.effort === 'xhigh') throw new Error('Gemini 推理强度请选择低、中或高');
 }
 export function createJob(project: Project | undefined, kind: TaskKind, ai: AIConfig | null, chapterIds: string[], instruction: string, styleId = '', sourceId = '', selection?: { start: number; end: number }): Job {
   const chapters = project?.chapters.filter(c => chapterIds.includes(c.id)) ?? [];

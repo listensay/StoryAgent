@@ -79,7 +79,7 @@ describe('writing activity persistence and completion', () => {
 
 describe('provider analysis streaming', () => {
   it('requests provider summaries only for tasks that display analysis', () => {
-    const config = { ...newAISelection(), ...defaultAdvanced(), providerId: 'test', model: 'test', reasoning: 'effort' as const };
+    const config = { ...newAISelection(), ...defaultAdvanced(), providerId: 'test', model: 'test', effort: 'medium' as const };
     const provider = { id: 'test', name: '测试', protocol: 'responses' as const, baseUrl: 'http://localhost/v1', models: ['test'], enabled: true, hasKey: false, maxRetries: 0, advanced: defaultAdvanced() };
     expect(requestBody(provider, config, '', '').body.reasoning).toEqual({ effort: 'medium' });
     expect(requestBody(provider, config, '', '', true).body.reasoning).toEqual({ effort: 'medium', summary: 'auto' });

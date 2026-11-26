@@ -47,30 +47,28 @@ export function requestBody(provider: Provider, config: AIConfig, system: string
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (provider.protocol === 'chat') {
     const body: Record<string, unknown> = { model: config.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], stream: true, ...extra };
-    if (config.reasoning !== 'off') { body.reasoning_effort = config.effort; body.max_completion_tokens = config.maxTokens; }
+    if (config.effort !== 'default') { body.reasoning_effort = config.effort; body.max_completion_tokens = config.maxTokens; }
     else { body.max_tokens = config.maxTokens; if (config.sampling) body.temperature = config.temperature; }
     return { url: base + '/chat/completions', body, headers };
   }
   if (provider.protocol === 'responses') {
     const body: Record<string, unknown> = { model: config.model, instructions: system, input: user, max_output_tokens: config.maxTokens, stream: true, ...extra };
-    if (config.reasoning !== 'off') body.reasoning = { effort: config.effort, ...(includeReasoning ? { summary: 'auto' } : {}) };
+    if (config.effort !== 'default') body.reasoning = { effort: config.effort, ...(includeReasoning ? { summary: 'auto' } : {}) };
     else if (config.sampling) body.temperature = config.temperature;
     return { url: base + '/responses', body, headers };
   }
   if (provider.protocol === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01';
     const body: Record<string, unknown> = { model: config.model, system, messages: [{ role: 'user', content: user }], max_tokens: config.maxTokens, stream: true, ...extra };
-    if (config.reasoning === 'budget') body.thinking = { type: 'enabled', budget_tokens: config.budget };
-    else if (config.reasoning === 'adaptive') body.thinking = { type: 'adaptive' };
-    else if (config.sampling) body.temperature = Math.min(config.temperature, 1);
+    if (config.effort !== 'default') {
+      body.thinking = { type: 'adaptive' };
+      body.output_config = { ...extra.output_config, effort: config.effort };
+    } else if (config.sampling) body.temperature = Math.min(config.temperature, 1);
     return { url: base + '/messages', body, headers };
   }
   const generationConfig: Record<string, unknown> = { maxOutputTokens: config.maxTokens, ...(extra.generationConfig ?? {}) };
   if (config.sampling) generationConfig.temperature = config.temperature;
-  if (config.reasoning === 'budget') generationConfig.thinkingConfig = { thinkingBudget: config.budget };
-  else if (config.reasoning === 'effort') generationConfig.thinkingConfig = { thinkingLevel: config.effort };
-  else if (config.reasoning === 'adaptive') generationConfig.thinkingConfig = { thinkingBudget: -1 };
-  if (includeReasoning && config.reasoning !== 'off') Object.assign(generationConfig.thinkingConfig as object, { includeThoughts: true });
+  if (config.effort !== 'default') generationConfig.thinkingConfig = { thinkingLevel: config.effort.toUpperCase(), ...(includeReasoning ? { includeThoughts: true } : {}) };
   return { url: base + '/models/' + encodeURIComponent(config.model.replace(/^models\//, '')) + ':streamGenerateContent?alt=sse', body: { ...extra, systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: user }] }], generationConfig }, headers };
 }
 type Json = Record<string, any>; // Provider event payloads have independent, evolving schemas.

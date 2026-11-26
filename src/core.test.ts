@@ -47,7 +47,7 @@ describe('provider models and per-task AI configuration', () => {
     expect(migrated.schemaVersion).toBe(2);
     expect(migrated.providers[0].models).toEqual(['mock-model', 'listed-model', 'manual-model']);
     expect(migrated.providers[0].advanced.maxTokens).toBe(4096);
-    expect(migrated.jobs[0].ai).toMatchObject({ model: 'manual-model', maxTokens: 16384, contextChars: 128000, reasoning: 'effort', effort: 'high' });
+    expect(migrated.jobs[0].ai).toMatchObject({ model: 'manual-model', maxTokens: 16384, contextChars: 128000, effort: 'high' });
     expect(migrated.jobs[1].ai).toBeNull();
     expect(migrated).not.toHaveProperty('profiles');
     expect(migrated.jobs[0]).not.toHaveProperty('profileId');
@@ -68,7 +68,7 @@ describe('provider models and per-task AI configuration', () => {
   });
   it('combines provider advanced settings with task reasoning and keeps a snapshot', () => {
     const p = provider(); p.advanced = { ...defaultAdvanced(), maxTokens: 16384, contextChars: 96000, sampling: true, temperature: 0.5, extra: '{"top_p":0.9}' };
-    const selection = { ...newAISelection(), providerId: p.id, model: p.models[0], reasoning: 'effort' as const, effort: 'high' as const };
+    const selection = { ...newAISelection(), providerId: p.id, model: p.models[0], effort: 'high' as const };
     const resolved = resolveAI(selection, [p]);
     const job = createJob(undefined, 'scan', resolved, [], '');
     p.advanced.maxTokens = 2048; resolved.effort = 'low';
@@ -81,61 +81,73 @@ describe('provider models and per-task AI configuration', () => {
     expect(() => validateProvider({ ...provider(), advanced: { ...defaultAdvanced(), maxTokens: 0 } })).toThrow('输出');
     expect(() => validateProvider({ ...provider(), advanced: { ...defaultAdvanced(), extra: '[]' } })).toThrow('JSON 对象');
     expect(() => validateProvider({ ...provider('gemini'), advanced: { ...defaultAdvanced(), extra: '{"generationConfig":{"thinkingConfig":{}}}' } })).toThrow('覆盖 thinkingConfig');
-    expect(() => validateAI({ ...config(), reasoning: 'effort', effort: 'xhigh' }, provider('gemini'))).toThrow('低、中或高');
+    expect(() => validateAI({ ...config(), effort: 'xhigh' }, provider('gemini'))).toThrow('推理强度');
   });
-  it('maps per-use reasoning settings to each protocol', () => {
-    expect(requestBody(provider('responses'), { ...config(), reasoning: 'effort', effort: 'high' }, '', '').body.reasoning).toEqual({ effort: 'high' });
-    expect(requestBody(provider('anthropic'), { ...config(), reasoning: 'budget', budget: 4096 }, '', '').body.thinking).toEqual({ type: 'enabled', budget_tokens: 4096 });
-    expect(requestBody(provider('anthropic'), { ...config(), reasoning: 'adaptive' }, '', '').body.thinking).toEqual({ type: 'adaptive' });
-    expect(requestBody(provider('gemini'), { ...config(), reasoning: 'effort', effort: 'high' }, '', '').body.generationConfig).toMatchObject({ thinkingConfig: { thinkingLevel: 'high' } });
-    expect(requestBody(provider('gemini'), { ...config(), reasoning: 'adaptive' }, '', '').body.generationConfig).toMatchObject({ thinkingConfig: { thinkingBudget: -1 } });
+  it('maps a single effort level to each protocol, preserving unrelated output settings', () => {
+    const high = { ...config(), effort: 'high' as const, sampling: true };
+    expect(requestBody(provider('responses'), high, '', '').body.reasoning).toEqual({ effort: 'high' });
+    const anthropic = requestBody(provider('anthropic'), { ...high, extra: '{"output_config":{"format":{"type":"json_schema"}}}' }, '', '').body;
+    expect(anthropic.thinking).toEqual({ type: 'adaptive' });
+    expect(anthropic.output_config).toEqual({ format: { type: 'json_schema' }, effort: 'high' });
+    expect(anthropic).not.toHaveProperty('temperature');
+    expect(() => validateAI({ ...high, extra: '{"output_config":{"effort":"low"}}' }, provider('anthropic'))).toThrow('覆盖推理强度');
+    expect(requestBody(provider('gemini'), high, '', '', true).body.generationConfig).toMatchObject({ thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: true } });
+  });
+  it('leaves reasoning to the model by default, including tasks that display analysis', () => {
+    const useDefault = { ...config(), sampling: true };
+    expect(requestBody(provider('chat'), useDefault, '', '', true).body).toMatchObject({ temperature: 0.8, max_tokens: 8192 });
+    expect(requestBody(provider('chat'), useDefault, '', '', true).body).not.toHaveProperty('reasoning_effort');
+    expect(requestBody(provider('responses'), useDefault, '', '', true).body).not.toHaveProperty('reasoning');
+    const anthropic = requestBody(provider('anthropic'), useDefault, '', '', true).body;
+    expect(anthropic).not.toHaveProperty('thinking'); expect(anthropic).not.toHaveProperty('output_config');
+    expect(requestBody(provider('gemini'), useDefault, '', '', true).body.generationConfig).not.toHaveProperty('thinkingConfig');
   });
 });
 describe('shared AI selection', () => {
-  it.each(['effort', 'budget', 'adaptive', 'off'] as const)('persists %s settings independently of past task snapshots', reasoning => {
-    const state = emptyWorkspace();
-    state.providers = [provider(reasoning === 'effort' ? 'responses' : 'anthropic')];
-    state.aiSelection = { ...newAISelection(), providerId: 'test', model: 'mock-model', reasoning, effort: 'high', budget: 4096 };
-    const previous = createJob(undefined, 'scan', config(), [], ''); previous.status = 'ready';
-    state.jobs = [previous];
-    const restored = parseWorkspace(JSON.stringify(state));
-    expect(restored.aiSelection).toEqual(state.aiSelection);
-    expect(restored.jobs[0].ai).toEqual(previous.ai);
-    expect(resolveAI(restored.aiSelection, restored.providers)).toMatchObject(state.aiSelection);
+  it.each(['effort', 'budget', 'adaptive', 'off'] as const)('migrates the old %s mode in preferences and task snapshots', reasoning => {
+    const state = emptyWorkspace(); state.providers = [provider()];
+    const legacy = { providerId: 'test', model: 'mock-model', reasoning, effort: 'high', budget: 4096 };
+    const job = createJob(undefined, 'scan', config(), [], '');
+    const restored = parseWorkspace(JSON.stringify({ ...state, aiSelection: legacy, jobs: [{ ...job, ai: { ...job.ai, ...legacy } }] }));
+    const expected = { providerId: 'test', model: 'mock-model', effort: reasoning === 'effort' ? 'high' : 'default' };
+    expect(restored.aiSelection).toEqual(expected);
+    expect(restored.jobs[0].ai).toEqual({ ...defaultAdvanced(), ...expected });
+    restored.aiSelection.effort = 'low';
     expect(parseWorkspace(JSON.stringify(restored))).toEqual(restored);
+    expect(resolveAI(restored.aiSelection, restored.providers).effort).toBe('low');
+    expect(restored.jobs[0].ai?.effort).toBe(expected.effort);
   });
   it('restores the newest available selection when an older workspace has no shared preference', () => {
     const state = emptyWorkspace(); state.providers = [provider()];
     const older = { ...createJob(undefined, 'scan', config(), [], ''), createdAt: '2026-10-01T00:00:00Z' };
-    const recent = { ...createJob(undefined, 'review', { ...config(), reasoning: 'effort', effort: 'high' }, [], ''), createdAt: '2026-11-01T00:00:00Z' };
+    const recent = { ...createJob(undefined, 'review', { ...config(), effort: 'high' }, [], ''), createdAt: '2026-11-01T00:00:00Z' };
     const unavailable = { ...createJob(undefined, 'scan', { ...config(), providerId: 'removed' }, [], ''), createdAt: '2026-11-02T00:00:00Z' };
     state.jobs = [older, unavailable, recent];
     const restored = parseWorkspace(JSON.stringify({ ...state, aiSelection: undefined }));
-    expect(restored.aiSelection).toEqual({ ...newAISelection(), providerId: 'test', model: 'mock-model', reasoning: 'effort', effort: 'high' });
+    expect(restored.aiSelection).toEqual({ ...newAISelection(), providerId: 'test', model: 'mock-model', effort: 'high' });
     expect(restored.aiSelection).not.toHaveProperty('maxTokens');
   });
   it('retains a legacy preset selection even before the first task', () => {
     const legacy = { ...emptyWorkspace(), aiSelection: undefined, schemaVersion: 1, providers: [{ ...provider(), models: [] }], profiles: [{ ...config(), reasoning: 'effort', effort: 'high', id: 'old', name: '写作', tasks: ['draft'] }] };
-    expect(parseWorkspace(JSON.stringify(legacy)).aiSelection).toMatchObject({ providerId: 'test', model: 'mock-model', reasoning: 'effort', effort: 'high' });
+    expect(parseWorkspace(JSON.stringify(legacy)).aiSelection).toMatchObject({ providerId: 'test', model: 'mock-model', effort: 'high' });
   });
   it('keeps an explicit incomplete choice instead of restoring a past task on restart', () => {
     const state = emptyWorkspace(); state.providers = [provider()]; state.jobs = [createJob(undefined, 'scan', config(), [], '')];
-    state.aiSelection = { ...newAISelection(), providerId: 'test', reasoning: 'effort', effort: 'high' };
+    state.aiSelection = { ...newAISelection(), providerId: 'test', effort: 'high' };
     expect(parseWorkspace(JSON.stringify(state)).aiSelection).toEqual(state.aiSelection);
   });
   it('clears unavailable providers or models without choosing a different model', () => {
-    const selection = { ...newAISelection(), providerId: 'test', model: 'mock-model', reasoning: 'effort' as const, effort: 'high' as const };
+    const selection = { ...newAISelection(), providerId: 'test', model: 'mock-model', effort: 'high' as const };
     expect(normalizeAISelection(selection, [])).toEqual({ ...selection, providerId: '', model: '' });
     expect(normalizeAISelection(selection, [{ ...provider(), enabled: false }])).toEqual({ ...selection, providerId: '', model: '' });
     expect(normalizeAISelection(selection, [{ ...provider(), models: ['replacement'] }])).toEqual({ ...selection, model: '' });
     expect(selection.model).toBe('mock-model');
   });
   it('retains compatible reasoning and adjusts only unsupported settings after a protocol change', () => {
-    const selection = { ...newAISelection(), providerId: 'test', model: 'mock-model', reasoning: 'effort' as const, effort: 'xhigh' as const };
+    const selection = { ...newAISelection(), providerId: 'test', model: 'mock-model', effort: 'xhigh' as const };
     expect(normalizeAISelection(selection, [provider('responses')])).toEqual(selection);
     expect(normalizeAISelection(selection, [provider('gemini')])).toEqual({ ...selection, effort: 'high' });
-    expect(normalizeAISelection(selection, [provider('anthropic')])).toEqual({ ...selection, reasoning: 'off' });
-    expect(normalizeAISelection({ ...selection, reasoning: 'budget' }, [provider()])).toEqual({ ...selection, reasoning: 'off' });
+    expect(normalizeAISelection(selection, [provider('anthropic')])).toEqual({ ...selection, effort: 'high' });
   });
   it('gives separate workspaces independent preferences', () => {
     const a = emptyWorkspace(), b = emptyWorkspace();
@@ -174,8 +186,8 @@ describe('Skill import and history', () => {
 describe('protocol request and streaming', () => {
   it.each(['chat', 'responses', 'anthropic', 'gemini'] as const)('uses the %s protocol', protocol => { const request = requestBody(provider(protocol), config(), 'SYS', 'USER'); expect(request.body).toBeDefined(); expect(request.url).toMatch(protocol === 'chat' ? /chat\/completions$/ : protocol === 'responses' ? /responses$/ : protocol === 'anthropic' ? /messages$/ : /streamGenerateContent/); expect(JSON.stringify(request.body)).toContain('USER'); });
   it('sets reasoning without incompatible temperature and rejects reserved overrides', () => {
-    const p = { ...config(), reasoning: 'effort' as const, sampling: true }; const body = requestBody(provider(), p, '', '').body; expect(body.reasoning_effort).toBe('medium'); expect(body.temperature).toBeUndefined();
-    expect(() => validateAI({ ...p, extra: '{"messages":[]}' }, provider())).toThrow('覆盖'); expect(() => validateAI({ ...p, reasoning: 'budget', budget: p.maxTokens }, provider('anthropic'))).toThrow('预算');
+    const p = { ...config(), effort: 'medium' as const, sampling: true }; const body = requestBody(provider(), p, '', '').body; expect(body.reasoning_effort).toBe('medium'); expect(body.temperature).toBeUndefined();
+    expect(() => validateAI({ ...p, extra: '{"messages":[]}' }, provider())).toThrow('覆盖');
     expect(apiBase({ ...provider(), baseUrl: 'http://localhost/v1/chat/completions/' })).toBe('http://localhost/v1');
   });
   it('lists paginated Gemini models and filters embedding models', async () => { vi.mocked(http).mockResolvedValueOnce({ status: 200, bytes: new Uint8Array(), text: JSON.stringify({ models: [{ name: 'models/chat', supportedGenerationMethods: ['generateContent'] }, { name: 'models/embed', supportedGenerationMethods: ['embedContent'] }], nextPageToken: 'two' }) }).mockResolvedValueOnce({ status: 200, bytes: new Uint8Array(), text: JSON.stringify({ models: [{ name: 'models/chat2' }] }) }); expect(await getModels(provider('gemini'))).toEqual(['chat', 'chat2']); expect(vi.mocked(http).mock.calls[1]?.[0].url).toContain('pageToken=two'); });
