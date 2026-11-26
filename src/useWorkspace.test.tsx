@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createJob, defaultAdvanced, emptyWorkspace, newChapter, newProject, type Workspace } from './domain';
 import { contentHash } from './jobWorkflow';
+import { generate } from './ai';
 import { loadWorkspace, saveWorkspace } from './platform';
 import { useWorkspace, type Store } from './useWorkspace';
 
@@ -22,6 +23,7 @@ vi.mock('react', async importOriginal => {
   };
 });
 vi.mock('./platform', async importOriginal => ({ ...await importOriginal<typeof import('./platform')>(), loadWorkspace: vi.fn(), saveWorkspace: vi.fn() }));
+vi.mock('./ai', () => ({ generate: vi.fn() }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onCloseRequested: vi.fn().mockResolvedValue(() => {}), onFocusChanged: vi.fn().mockResolvedValue(() => {}) }) }));
 
 let store: Store;
@@ -108,5 +110,62 @@ describe('正文保存与记忆提取', () => {
     await store.saveChapter(project.id, project.chapters[0].id);
     expect(saveWorkspace).toHaveBeenCalled(); expect(store.stateRef.current.jobs).toEqual([]);
     expect(harness.updates).toContain('已保存'); expect(harness.updates.some(update => typeof update === 'string' && update.startsWith('正文已保存，记忆提取失败：'))).toBe(true);
+  });
+});
+
+
+describe('正文内润色', () => {
+  const selection = (content: string) => ({ start: 2, end: 6, content });
+  it('直接替换原章节选区，保留版本并清除过期记忆，不创建创作任务', async () => {
+    mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
+    chapter.summary = '旧摘要'; chapter.memoryHash = contentHash(chapter.content);
+    vi.mocked(generate).mockResolvedValueOnce('轻轻推开房');
+    await store.polishChapter(project.id, chapter.id, selection(chapter.content));
+    const result = store.stateRef.current.projects[0].chapters[0];
+    expect(result.content).toBe('林舟轻轻推开房。');
+    expect(result.versions[0]).toMatchObject({ label: '润色前', content: chapter.content });
+    expect(result.summary).toBe(''); expect(result.memoryHash).toBeUndefined();
+    expect(store.stateRef.current.projects[0].chapters[1].content).toBe('门外落着雨。');
+    expect(store.stateRef.current.jobs).toEqual([]);
+  });
+  it.each(['cancel', 'failure', 'edited', 'deleted', 'replace'] as const)('%s时不覆盖正文', async condition => {
+    mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
+    let finish!: (value: string) => void, fail!: (error: Error) => void;
+    vi.mocked(generate).mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    const pending = store.polishChapter(project.id, chapter.id, selection(chapter.content));
+    await Promise.resolve();
+    if (condition === 'cancel') store.cancelPolish(chapter.id);
+    if (condition === 'edited') store.update(state => { state.projects[0].chapters[0].content = '新的编辑'; });
+    if (condition === 'deleted') store.update(state => { state.projects[0].chapters.shift(); });
+    if (condition === 'replace') await store.replace(structuredClone(store.stateRef.current));
+    if (condition === 'failure') fail(new Error('网络失败')); else finish('新片段');
+    if (condition === 'failure') await expect(pending).rejects.toThrow('网络失败');
+    else if (condition === 'edited') await expect(pending).rejects.toThrow('正文已更新');
+    else if (condition === 'deleted') await expect(pending).rejects.toThrow('章节已移除');
+    else await pending;
+    expect(store.stateRef.current.projects[0].chapters.some(item => item.content.includes('新片段'))).toBe(false);
+    expect(store.stateRef.current.projects[0].chapters.every(item => item.versions.length === 0)).toBe(true);
+    expect(store.stateRef.current.jobs).toEqual([]);
+  });
+  it('阻止重复润色和同时恢复本章写作任务', async () => {
+    mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
+    const job = createJob(project, 'rewrite', null, [chapter.id], ''); job.status = 'paused'; store.stateRef.current.jobs.push(job);
+    let finish!: (value: string) => void;
+    vi.mocked(generate).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = store.polishChapter(project.id, chapter.id, selection(chapter.content));
+    await Promise.resolve();
+    await expect(store.polishChapter(project.id, chapter.id, selection(chapter.content))).rejects.toThrow('请等待正文润色完成');
+    expect(await store.canUpdate()).toBe(false);
+    store.resumeJob(job.id);
+    expect(harness.updates).toContain('请等待正文润色完成');
+    expect(store.stateRef.current.jobs[0].status).toBe('paused');
+    finish('修改后'); await pending;
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+  it('本章已有写作任务时拒绝润色', async () => {
+    mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[0];
+    store.stateRef.current.jobs.push(createJob(project, 'draft', null, [chapter.id], ''));
+    await expect(store.polishChapter(project.id, chapter.id, selection(chapter.content))).rejects.toThrow();
+    expect(generate).not.toHaveBeenCalled();
   });
 });

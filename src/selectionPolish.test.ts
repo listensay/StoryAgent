@@ -1,58 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { createJob, defaultAdvanced, emptyWorkspace, newAISelection, newProject } from './domain';
-import { acceptWriting, prepareWriting, proposedContent, writingStep } from './jobWorkflow';
-import { buildPrompt } from './prompts';
-import { hasTextSelection, selectionPolishTask } from './selectionPolish';
+import { newChapter } from './domain';
+import { applySelectionPolish, hasTextSelection, selectionPolishPrompt } from './selectionPolish';
 
 function setup() {
-  const state = emptyWorkspace(), project = newProject('夜归', 'long');
-  state.projects.push(project);
-  const chapter = project.chapters[0];
+  const chapter = newChapter('夜归');
   chapter.content = '雨停了。\n她走得很快。\n门还开着。';
-  const selected = { start: 5, end: 11, content: chapter.content };
-  const task = selectionPolishTask(project.id, chapter, selected);
-  const ai = { ...newAISelection(), ...defaultAdvanced() };
-  const job = createJob(project, task.kind, ai, task.chapterIds, task.instruction, '', '', task.selection);
-  prepareWriting(job);
-  return { state, project, chapter, selected, task, ai, job };
+  return { chapter, selected: { start: 5, end: 11, content: chapter.content } };
 }
 
 describe('正文选区润色', () => {
-  it('只润色选中的短句，提供前后文且不继承整章字数', () => {
-    const { state, job, ai, task } = setup();
-    expect(task).not.toHaveProperty('targetWords');
-    expect(job.steps[0].selection).toBe('她走得很快。');
-    const prompt = buildPrompt(state, job, job.steps[0], ai);
-    expect(prompt.user).toContain('润色选中的正文片段');
-    expect(prompt.user).toContain('雨停了。');
+  it('使用独立润色指令并提供选区前后文', () => {
+    const { chapter, selected } = setup();
+    const prompt = selectionPolishPrompt(chapter, selected, 8000);
+    expect(prompt.system).toContain('润色选中的正文片段');
+    expect(prompt.system).toContain('只输出润色后的片段');
+    expect(prompt.user).toContain('前文：\n雨停了。');
+    expect(prompt.user).toContain('待润色片段：\n她走得很快。');
     expect(prompt.user).toContain('门还开着。');
-    expect(prompt.user).toContain('指定改写片段：\n她走得很快。');
-    expect(prompt.user).not.toContain('正文目标篇幅');
   });
 
-  it('采用时仅替换选区并保存原文，摘要记忆使用合并后的正文', () => {
-    const { state, project, chapter, job } = setup();
-    const original = chapter.content;
-    job.steps[0].output = '她加快了脚步。';
-    const expected = '雨停了。\n她加快了脚步。\n门还开着。';
-    expect(proposedContent(job, job.steps[0])).toBe(expected);
-    expect(writingStep(job, job.steps[1]).baseContent).toBe(expected);
-    expect(writingStep(job, job.steps[2]).baseContent).toBe(expected);
-    job.steps[1].output = '雨后归家';
-    job.steps[2].output = '{"summary":"雨后归家","notes":[]}';
-    job.steps.forEach(step => { step.status = 'ready'; });
-    acceptWriting(state, job, job.steps[0]);
-    expect(project.chapters[0].content).toBe(expected);
-    expect(project.chapters[0].versions[0].content).toBe(original);
+  it('直接替换选区并保存原文版本', () => {
+    const { chapter, selected } = setup();
+    const result = applySelectionPolish(chapter, selected, '她加快了脚步。');
+    expect(result.content).toBe('雨停了。\n她加快了脚步。\n门还开着。');
+    expect(result.versions[0]).toMatchObject({ label: '润色前', content: chapter.content });
+    expect(chapter.content).toBe(selected.content);
+    expect(chapter.versions).toEqual([]);
   });
 
-  it('拒绝过期选区及生成期间修改过的正文', () => {
-    const { state, project, chapter, selected, job } = setup();
+  it('不重复保存未变化的正文，拒绝空输出', () => {
+    const { chapter, selected } = setup();
+    expect(applySelectionPolish(chapter, selected, chapter.content.slice(selected.start, selected.end))).toBe(chapter);
+    expect(() => applySelectionPolish(chapter, selected, ' \n')).toThrow('模型未返回润色正文');
+  });
+
+  it('拒绝过期选区、生成期间修改的正文以及被删除的章节', () => {
+    const { chapter, selected } = setup();
     chapter.content += '新的结尾。';
-    expect(() => selectionPolishTask(project.id, chapter, selected)).toThrow('正文已更新');
-    expect(() => selectionPolishTask(project.id, undefined, selected)).toThrow('章节已移除');
-    job.steps.forEach(step => { step.status = 'ready'; step.output = step.stage === 'memory' ? '{"summary":"","notes":[]}' : '润色结果'; });
-    expect(() => acceptWriting(state, job, job.steps[0])).toThrow('正文已更新');
+    expect(() => selectionPolishPrompt(chapter, selected, 8000)).toThrow('正文已更新');
+    expect(() => applySelectionPolish(chapter, selected, '润色结果')).toThrow('正文已更新');
+    expect(() => applySelectionPolish(undefined, selected, '润色结果')).toThrow('章节已移除');
     expect(chapter.content).toContain('新的结尾。');
   });
 
@@ -61,12 +48,18 @@ describe('正文选区润色', () => {
   });
 
   it('保留跨段落与 Unicode 选区的精确边界', () => {
-    const { project, chapter } = setup();
+    const { chapter } = setup();
     chapter.content = '开头🌧雨落。\n她停住。结尾';
     const start = chapter.content.indexOf('🌧'), end = chapter.content.indexOf('结尾');
-    const task = selectionPolishTask(project.id, chapter, { start, end, content: chapter.content });
-    const job = createJob(project, task.kind, null, task.chapterIds, task.instruction, '', '', task.selection);
-    job.steps[0].output = '雨落在她肩上。';
-    expect(proposedContent(job, job.steps[0])).toBe('开头雨落在她肩上。结尾');
+    expect(applySelectionPolish(chapter, { start, end, content: chapter.content }, '雨落在她肩上。').content).toBe('开头雨落在她肩上。结尾');
+  });
+
+  it('前后文遵守上下文预算，选区超限时拒绝发送', () => {
+    const chapter = { ...newChapter('长章'), content: '前'.repeat(5000) + '选区' + '后'.repeat(5000) };
+    const selected = { start: 5000, end: 5002, content: chapter.content };
+    const prompt = selectionPolishPrompt(chapter, selected, 1000);
+    expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(1000);
+    expect(prompt.user).toContain('待润色片段：\n选区');
+    expect(() => selectionPolishPrompt(chapter, { start: 0, end: 10002, content: chapter.content }, 1000)).toThrow('超过上下文上限');
   });
 });

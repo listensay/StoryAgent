@@ -9,8 +9,8 @@ import { Markdown } from './Markdown';
 import { useAIScroll } from './useAIScroll';
 import { writingCompleted, writingSkillFiles, writingStageName } from './writingActivity';
 
-export function WritingChat({ job, history, project, store, onResult }: { job?: Job; history?: Job[]; project: Project; store: Store; onResult: (chapterId: string, jobId?: string) => void }) {
-  const entries = history ?? (job ? [job] : []);
+export function WritingChat({ job, history, chapterId, project, store, onResult }: { job?: Job; history?: Job[]; chapterId?: string; project: Project; store: Store; onResult: (chapterId: string, jobId?: string) => void }) {
+  const entries = (history ?? (job ? [job] : [])).filter(entry => !chapterId || entry.steps.some(step => step.chapterId === chapterId)).map(entry => chapterId ? { ...entry, steps: entry.steps.filter(step => step.chapterId === chapterId) } : entry);
   const taskRefs = useRef(new Map<string, HTMLDivElement>());
   const generating = entries.some(entry => ['queued', 'running'].includes(entry.status));
   const { contentRef, scrollToBottom } = useAIScroll(generating);

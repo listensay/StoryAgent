@@ -18,6 +18,7 @@ import { createCreationRound, creationContextKey, finishCreationRound, newCreati
 import { type CreationStage } from './novelCreationData';
 import { acceptPlanning, hasPlanningChanges, parsePlanningResult, planningSnapshot } from './planning';
 import { acceptNovel, applyNovelResult, hasNovelChanges, novelBefore, novelSnapshot, parseNovelResult, recoverNovelJobs, undoNovel } from './novelAssistant';
+import { applySelectionPolish, selectionPolishPrompt, type PolishSelection } from './selectionPolish';
 export { parseMemory } from './jobWorkflow';
 
 type Launch = { kind: TaskKind; projectId?: string; chapterIds?: string[]; instruction?: string; targetWords?: number; styleId?: string; sourceId?: string; sourceText?: string; sourceTitle?: string; selection?: { start: number; end: number }; training?: Job['training']; planningChat?: boolean; skillTarget?: Job['skillTarget'] };
@@ -31,6 +32,7 @@ export function useWorkspace() {
   const [messageId, setMessageId] = useState(0);
   const controllers = useRef(new Map<string, AbortController>());
   const savingChapters = useRef(new Set<string>());
+  const [polishingChapters, setPolishingChapters] = useState<string[]>([]);
   const [requests] = useState(() => new AIRequestQueue(id => stateRef.current.providers.find(p => p.id === id)?.concurrency ?? 2));
   const generation = useRef(0);
   const [queueTick, setQueueTick] = useState(0);
@@ -200,6 +202,7 @@ export function useWorkspace() {
     if (['memory', 'review'].includes(job.kind) && !job.steps.some(s => s.baseContent.trim())) throw new Error('请先添加小说正文');
     if (['revise', 'prepare', 'draft', 'continue', 'rewrite', 'plan'].includes(job.kind)) requirePreparation(project);
     if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
+      if (chapterIds.some(id => controllers.current.has(`polish:${id}`))) throw new Error('请等待正文润色完成');
       requireIdleWriting(current.jobs, job.projectId, chapterIds);
       if (options.targetWords !== undefined && (!Number.isInteger(options.targetWords) || options.targetWords < 100 || options.targetWords > 50000)) throw new Error('目标字数须为 100 至 50000');
       job.targetWords = options.targetWords;
@@ -250,6 +253,40 @@ export function useWorkspace() {
       s.jobs.unshift(job);
     }); notify('任务已添加'); return job.id;
   }, [notify, update]);
+  const polishChapter = useCallback(async (projectId: string, chapterId: string, selected: PolishSelection) => {
+    if (restarting.current) throw new Error('正在更新软件');
+    const key = `polish:${chapterId}`;
+    if (controllers.current.has(key)) throw new Error('请等待正文润色完成');
+    const current = stateRef.current;
+    requireIdleWriting(current.jobs, projectId, [chapterId]);
+    const chapter = current.projects.find(p => p.id === projectId)?.chapters.find(c => c.id === chapterId);
+    const config = resolveAI(current.aiSelection, current.providers);
+    const provider = current.providers.find(p => p.id === config.providerId)!;
+    const prompt = selectionPolishPrompt(chapter, selected, config.contextChars);
+    const controller = new AbortController(), epoch = generation.current;
+    controllers.current.set(key, controller);
+    setPolishingChapters(ids => [...ids, chapterId]);
+    try {
+      const output = await requests.run(provider.id, controller.signal, () => generate(provider, config, prompt.system, prompt.user, controller.signal, () => {}));
+      controller.signal.throwIfAborted();
+      if (generation.current !== epoch) return;
+      update(s => {
+        const project = s.projects.find(p => p.id === projectId);
+        const index = project?.chapters.findIndex(c => c.id === chapterId) ?? -1;
+        if (!project || index < 0) throw new Error('章节已移除');
+        project.chapters[index] = applySelectionPolish(project.chapters[index], selected, output);
+        project.updatedAt = now();
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      if (controllers.current.get(key) === controller) {
+        controllers.current.delete(key);
+        setPolishingChapters(ids => ids.filter(id => id !== chapterId));
+      }
+    }
+  }, [requests, update]);
+  const cancelPolish = useCallback((chapterId: string) => { controllers.current.get(`polish:${chapterId}`)?.abort(); }, []);
   const saveChapter = useCallback(async (projectId: string, chapterId: string) => {
     const key = `${projectId}:${chapterId}`;
     if (savingChapters.current.has(key)) return;
@@ -395,7 +432,10 @@ export function useWorkspace() {
       const current = stateRef.current;
       const job = current.jobs.find(j => j.id === id);
       if (!job || !['paused', 'failed'].includes(job.status)) return;
-      if (['draft', 'continue', 'rewrite'].includes(job.kind)) requireIdleWriting(current.jobs, job.projectId, job.steps.map(step => step.chapterId), id);
+      if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
+        if (job.steps.some(step => controllers.current.has(`polish:${step.chapterId}`))) throw new Error('请等待正文润色完成');
+        requireIdleWriting(current.jobs, job.projectId, job.steps.map(step => step.chapterId), id);
+      }
       if (job.novelChat && current.jobs.some(value => value.id !== id && value.projectId === job.projectId && value.novelChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
       if (job.planningChat && current.jobs.some(value => value.id !== id && value.projectId === job.projectId && value.planningChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
       if (job.creationTask) {
@@ -490,10 +530,11 @@ export function useWorkspace() {
   const replace = useCallback(async (workspace: Workspace) => {
     await refreshCredentials(workspace);
     generation.current++; controllers.current.forEach(c => c.abort()); controllers.current.clear();
+    setPolishingChapters([]);
     stateRef.current = workspace; setState(workspace); setLoaded(true); setLoadError(''); setSaveStatus('保存中');
     await saveWorkspace(workspace); if (stateRef.current === workspace) setSaveStatus('已保存');
   }, []);
-  const canUpdate = useCallback(async () => !stateRef.current.jobs.some(job => ['queued', 'running'].includes(job.status)) && !await hasActiveRequests(), []);
+  const canUpdate = useCallback(async () => !controllers.current.size && !stateRef.current.jobs.some(job => ['queued', 'running'].includes(job.status)) && !await hasActiveRequests(), []);
   const prepareUpdate = useCallback(async () => {
     restarting.current = true;
     if (!await canUpdate()) { restarting.current = false; return false; }
@@ -504,7 +545,7 @@ export function useWorkspace() {
     return true;
   }, [canUpdate]);
   const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, saveChapter, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, polishChapter, cancelPolish, polishingChapters, saveChapter, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };

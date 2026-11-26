@@ -3,12 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles } from './icons';
 import { hasTextSelection, selectionAnchor, type PolishSelection, type TextSelection } from './selectionPolish';
 
-export function ContentEditor({ value, onChange, onSelectionChange, onPolish, busy }: {
+export function ContentEditor({ value, onChange, onSelectionChange, onPolish, busy, readOnly }: {
   value: string;
   onChange: (value: string) => void;
   onSelectionChange: (selection: TextSelection) => void;
   onPolish: (selection: PolishSelection) => void;
   busy: boolean;
+  readOnly?: boolean;
 }) {
   const editor = useRef<HTMLTextAreaElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -55,7 +56,7 @@ export function ContentEditor({ value, onChange, onSelectionChange, onPolish, bu
   return <>
     <Textarea ref={editor} variant="unstyled" className="novel-editor"
       styles={{ root: { flex: 1, minHeight: 0 }, wrapper: { height: '100%' }, input: { height: '100%', fontSize: 16, lineHeight: 2, resize: 'none', padding: '16px 28px 28px' } }}
-      aria-label="章节正文" placeholder="开始写作" value={value} spellCheck={false}
+      aria-label="章节正文" placeholder="开始写作" value={value} spellCheck={false} readOnly={readOnly} aria-busy={readOnly}
       onChange={event => { dismiss(); onSelectionChange({ start: 0, end: 0 }); onChange(event.currentTarget.value); }}
       onPointerDown={() => { dragging.current = true; dismiss(); }}
       onSelect={() => { if (!dragging.current) capture(); }}
