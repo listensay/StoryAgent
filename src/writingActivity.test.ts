@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createJob, defaultAdvanced, emptyWorkspace, newAISelection, newProject, parseWorkspace } from './domain';
 import { requestBody, StreamParser } from './ai';
 import { prepareWriting } from './jobWorkflow';
+import { createWritingSkillTools } from './writingSkillTools';
 import { buildPrompt } from './prompts';
 import { publishJobOutput } from './jobOutput';
 import { writingCompleted, writingSkillFiles } from './writingActivity';
@@ -35,7 +36,7 @@ describe('writing activity persistence and completion', () => {
     const job = createJob(project, 'draft', config, project.chapters[0].id, '');
     const skill = state.skills.find(skill => skill.id === 'builtin-draft')!;
     skill.files.push({ path: 'references/unrelated.txt', content: '未读取资料' });
-    expect(buildPrompt(state, job, job.steps[0], config).skills).toEqual([{ id: skill.id, name: skill.name, version: skill.version, files: ['SKILL.md', 'references/unrelated.txt'], contents: skill.files }]);
+    expect(buildPrompt(state, job, job.steps[0], config).skills).toEqual([{ id: skill.id, name: skill.name, version: skill.version, automatic: true, files: ['SKILL.md'], contents: [skill.files[0]] }]);
     const memory = buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config);
     expect(memory.skills.map(skill => skill.id)).not.toContain('builtin-draft');
     state.skills.find(skill => skill.id === 'builtin-review')!.enabled = false;
@@ -54,7 +55,10 @@ describe('writing activity persistence and completion', () => {
     project.skillIds = [skill.id];
     const config = { ...newAISelection(), ...defaultAdvanced() };
     const job = createJob(project, 'draft', config, project.chapters[0].id, ''); state.jobs.push(job);
-    const loaded = buildPrompt(state, job, job.steps[0], config).skills;
+    const prompt = buildPrompt(state, job, job.steps[0], config), loaded = prompt.skills;
+    expect(loaded[0].files).toEqual(['SKILL.md']);
+    const tools = createWritingSkillTools(prompt.toolSkills!, (_id, file) => { loaded[0].files.push(file.path); loaded[0].contents!.push(file); });
+    tools.execute('read_skill_file', { skill: skill.id, path: 'references/scenes.md' }, 2000);
     const expected = structuredClone(skill.files.slice(0, 2));
     expect(loaded[0].contents).toEqual(expected);
     job.steps[0].execution = { summary: '任务分析', skills: loaded, startedAt: '2026-11-22T00:00:00Z' };

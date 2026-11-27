@@ -1,6 +1,7 @@
 import { type AIConfig, type Provider, validateAI } from './domain';
 import { http } from './platform';
-import { PermanentAIError, withAIRetry } from './aiRetry';
+import { PermanentAIError, withAIIdleTimeout, withAIRetry } from './aiRetry';
+import { READY_TO_WRITE, ToolConversation, readToolTurn, type ModelRequest, type ToolTurn, type WritingTools } from './toolGeneration';
 
 export function apiBase(provider: Provider) {
   let url: URL;
@@ -102,6 +103,9 @@ export function reasoningText(data: Json): string {
   if (Array.isArray(data.content)) return data.content.filter((c: Json) => c.type === 'thinking').map((c: Json) => c.thinking ?? '').join('\n');
   return '';
 }
+function truncatedResponse(data: Json): boolean {
+  return data.status === 'incomplete' || data.stop_reason === 'max_tokens' || !!data.choices?.some((c: Json) => c.finish_reason === 'length') || !!data.candidates?.some((c: Json) => c.finishReason === 'MAX_TOKENS');
+}
 export class StreamParser {
   private buffer = '';
   text = '';
@@ -150,7 +154,7 @@ export class StreamParser {
     }
     if (this.buffer.trim().startsWith('data:') || this.buffer.includes('\ndata:')) this.event(this.buffer);
     if (!this.text && raw.trim().startsWith('{')) {
-      try { const data = JSON.parse(raw); this.text = outputText(data); this.reasoning = reasoningText(data); this.completed = true; this.truncated = data.status === 'incomplete' || data.stop_reason === 'max_tokens' || data.choices?.some((c: Json) => c.finish_reason === 'length') || data.candidates?.some((c: Json) => c.finishReason === 'MAX_TOKENS'); if (this.text) this.onText(this.text); if (this.reasoning) this.onReasoning?.(this.reasoning); } catch (e) { this.error = e instanceof Error ? e : new Error(String(e)); }
+      try { const data = JSON.parse(raw); this.text = outputText(data); this.reasoning = reasoningText(data); this.completed = true; this.truncated = truncatedResponse(data); if (this.text) this.onText(this.text); if (this.reasoning) this.onReasoning?.(this.reasoning); } catch (e) { this.error = e instanceof Error ? e : new Error(String(e)); }
     }
     if (this.error) throw this.error;
     if (!this.text.trim() && this.truncated) throw new PermanentAIError('已达到输出上限，可继续生成');
@@ -159,19 +163,55 @@ export class StreamParser {
     return this.text;
   }
 }
-export async function generate(provider: Provider, config: AIConfig, system: string, user: string, signal: AbortSignal, onText: (text: string) => void, onReasoning?: (text: string) => void): Promise<string> {
-  const request = requestBody(provider, config, system, user, !!onReasoning);
-  return withAIRetry(provider, signal, async () => {
-    // Keep the last preview until a retry actually produces replacement text.
-    let reasoningPublished = false;
-    const parser = new StreamParser(text => { if (!reasoningPublished) { reasoningPublished = true; onReasoning?.(''); } onText(text); }, text => { reasoningPublished = true; onReasoning?.(text); });
-    let active = true;
-    try {
-      const response = await http({ url: request.url, method: 'POST', headers: request.headers, body: JSON.stringify(request.body), providerId: provider.id, ...auth(provider), signal, onChunk: chunk => { if (active && !signal.aborted) parser.feed(chunk); } });
-      signal.throwIfAborted();
-      const text = parser.finish(response.text);
+export async function generate(provider: Provider, config: AIConfig, system: string, user: string, signal: AbortSignal, onText: (text: string) => void, onReasoning?: (text: string) => void, idleTimeoutMs?: number, tools?: WritingTools): Promise<string> {
+  const base = requestBody(provider, config, system, user, !!onReasoning);
+  const run = async (signal: AbortSignal, progress?: () => void) => {
+    const send = (request: ModelRequest, onChunk?: (chunk: string) => void) => http({ url: request.url, method: 'POST', headers: request.headers, body: JSON.stringify(request.body), providerId: provider.id, ...auth(provider), signal, onChunk });
+    const newParser = () => {
+      // Keep the last preview until a retry actually produces replacement text.
+      let reasoningPublished = false;
+      return new StreamParser(text => {
+        progress?.();
+        if (!reasoningPublished) { reasoningPublished = true; onReasoning?.(''); }
+        onText(text);
+      }, text => { progress?.(); reasoningPublished = true; onReasoning?.(text); });
+    };
+    const finish = (parser: StreamParser, raw: string) => {
+      const text = parser.finish(raw);
       if (parser.truncated) throw new PermanentAIError('已达到输出上限，可继续生成');
       return text;
-    } finally { active = false; }
-  });
+    };
+    let finalRequest = base;
+    if (tools) {
+      if (system.length + user.length > config.contextChars) throw new PermanentAIError('任务材料超过上下文上限，请调整 AI 上下文或缩小范围');
+      const conversation = new ToolConversation(provider.protocol, base, config.contextChars);
+      for (let request = conversation.decisionRequest(); request; request = conversation.decisionRequest()) {
+        const decision = request;
+        const reply = await withAIRetry<{ text: string } | { turn?: ToolTurn }>(provider, signal, async () => {
+          const { text: raw } = await send(decision);
+          signal.throwIfAborted();
+          const data = JSON.parse(raw), text = outputText(data); // Includes refusal and provider error checks.
+          const turn = readToolTurn(provider.protocol, data);
+          if (!turn && text.trim() !== READY_TO_WRITE) return { text: finish(newParser(), raw) };
+          if (truncatedResponse(data)) throw new PermanentAIError('已达到输出上限，可继续生成');
+          return { turn };
+        });
+        signal.throwIfAborted();
+        if ('text' in reply) return reply.text;
+        progress?.();
+        if (!reply.turn || !conversation.accept(reply.turn, tools)) break;
+      }
+      finalRequest = conversation.finalRequest();
+    }
+    return withAIRetry(provider, signal, async () => {
+      const parser = newParser();
+      let active = true;
+      try {
+        const response = await send(finalRequest, chunk => { if (active && !signal.aborted) parser.feed(chunk); });
+        signal.throwIfAborted();
+        return finish(parser, response.text);
+      } finally { active = false; }
+    });
+  };
+  return idleTimeoutMs === undefined ? run(signal) : withAIIdleTimeout(signal, idleTimeoutMs, run);
 }

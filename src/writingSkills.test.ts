@@ -25,13 +25,15 @@ describe('author-selected writing skills', () => {
     expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(config.contextChars);
   });
 
-  it('loads selected linked prose resources without cutting their ending', () => {
+  it('makes linked prose resources available to the writer without preloading their content', () => {
     const { state, config, skill, job } = setup();
     skill.files[0].content += '\n参考 [对白](references/dialogue.md)。';
     const content = '人物语言规则。'.repeat(700) + '末尾的关键反例';
     skill.files.push({ path: 'references/dialogue.md', content });
     const prompt = buildPrompt(state, job, job.steps[0], config);
-    expect(prompt.system).toContain(skill.files[0].content); expect(prompt.system).toContain(content);
+    expect(prompt.system).toContain(skill.files[0].content); expect(prompt.system).not.toContain(content);
+    expect(prompt.toolSkills?.[0].files[1].content).toBe(content);
+    expect(prompt.skills.find(s => s.id === skill.id)?.files).toEqual(['SKILL.md']);
   });
 
   it('reports insufficient context instead of silently removing selected rules', () => {

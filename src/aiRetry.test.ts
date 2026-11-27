@@ -179,6 +179,52 @@ describe('流式重试与停止', () => {
     expect(http).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
+  it('起草没有任何进展时取消原生请求，心跳和迟到的分片不延长等待', async () => {
+    const onText = vi.fn();
+    let finish!: (value: ReturnType<typeof response>) => void;
+    vi.mocked(http).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const task = generate(provider(), config, '', '', new AbortController().signal, onText, undefined, 120_000);
+    const failed = expect(task).rejects.toThrow('模型长时间未返回新内容');
+    const request = vi.mocked(http).mock.calls[0][0];
+    await vi.advanceTimersByTimeAsync(119_999);
+    request.onChunk?.(': keepalive\n\n');
+    expect(request.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await failed;
+    expect(request.signal?.aborted).toBe(true);
+    request.onChunk?.(event('超时后到达'));
+    finish(result('迟到正文')); await vi.runAllTimersAsync();
+    expect(onText).not.toHaveBeenCalled();
+    expect(http).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('起草收到推理或正文时重新计时，持续有进展的长任务能完成', async () => {
+    let finish!: (value: ReturnType<typeof response>) => void;
+    vi.mocked(http).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const task = generate(provider(), config, '', '', new AbortController().signal, vi.fn(), undefined, 120_000);
+    const request = vi.mocked(http).mock.calls[0][0];
+    await vi.advanceTimersByTimeAsync(110_000);
+    request.onChunk?.('data: {"choices":[{"delta":{"reasoning_content":"分析"}}]}\n\n');
+    await vi.advanceTimersByTimeAsync(110_000);
+    request.onChunk?.(event('已有正文'));
+    await vi.advanceTimersByTimeAsync(110_000);
+    expect(request.signal?.aborted).toBe(false);
+    request.onChunk?.('data: [DONE]\n\n'); finish(response());
+    expect(await task).toBe('已有正文');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('起草中途停止不依赖原生请求返回，保留已收到的正文', async () => {
+    const controller = new AbortController(), onText = vi.fn();
+    vi.mocked(http).mockImplementationOnce(() => new Promise(() => {}));
+    const task = generate(provider(), config, '', '', controller.signal, onText, undefined, 120_000);
+    const request = vi.mocked(http).mock.calls[0][0];
+    request.onChunk?.(event('已有正文')); controller.abort();
+    await expect(task).rejects.toMatchObject({ name: 'AbortError' });
+    request.onChunk?.(event('已停止'));
+    expect(onText.mock.calls).toEqual([['已有正文']]);
+    expect(request.signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it('已停止的任务不发送请求', async () => {
     const controller = new AbortController(); controller.abort();
     await expect(run(provider(), controller)).rejects.toMatchObject({ name: 'AbortError' });

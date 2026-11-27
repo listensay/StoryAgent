@@ -18,6 +18,70 @@ function setup() {
   return { project, job, store };
 }
 
+function renderSkillActivity({ project, job, store }: ReturnType<typeof setup>, expanded: string[] = []) {
+  // Set the open panels for SSR just as a user would by expanding the Skill and file controls.
+  return renderToStaticMarkup(<MantineProvider theme={{ components: { Accordion: { defaultProps: { defaultValue: expanded } } } }}>
+    <WritingChat job={job} chapterId={project.chapters[0].id} project={project} store={store} onResult={vi.fn()} />
+  </MantineProvider>);
+}
+
+describe('writing chat Skill activity', () => {
+  it('shows the selected Skills and lists only the files read in this step', () => {
+    const context = setup(), { job, store } = context;
+    const [first, second] = store.state.skills;
+    const read = [{ path: 'SKILL.md', content: '细纲规则' }, { path: 'references/scenes.md', content: '场景参考' }];
+    first.files = [...read, { path: 'references/search-hit.md', content: '只命中的候选内容' }];
+    job.status = 'running'; job.steps[0].status = 'running';
+    job.steps[0].execution = { summary: '', startedAt: job.createdAt, skills: [
+      { id: first.id, name: first.name, version: first.version, files: read.map(file => file.path), contents: read },
+      { id: second.id, name: second.name, version: second.version, files: [], contents: [] },
+    ] };
+    const html = renderSkillActivity(context, [`skill-${first.id}`, `skill-${second.id}`]);
+    expect(html).toContain(`本步骤选用的 Skill · ${first.name}`);
+    expect(html).toContain(`本步骤选用的 Skill · ${second.name}`);
+    expect(html).toContain('已读 2 个文件');
+    expect(html).toContain('>SKILL.md<');
+    expect(html).toContain('>references/scenes.md<');
+    expect(html).not.toContain('references/search-hit.md');
+    expect(html).not.toContain('只命中的候选内容');
+    expect(html).toContain('已读 0 个文件');
+    expect(html).toContain('暂无已读文件');
+  });
+
+  it.each(['paused', 'failed'] as const)('keeps the saved read record after a %s task reloads', status => {
+    const context = setup(), { job, store } = context;
+    job.status = status;
+    const file = { path: 'references/ending.md', content: '当时读取的结尾规则' };
+    job.steps[0].execution = { summary: '', startedAt: job.createdAt, skills: [
+      { id: 'ending', name: '结尾', version: '1.0', files: [file.path], contents: [file] },
+    ] };
+    store.state = parseWorkspace(JSON.stringify(store.state));
+    const html = renderSkillActivity({ ...context, job: store.state.jobs[0] }, ['skill-ending', encodeURIComponent(file.path)]);
+    expect(html).toContain(status === 'paused' ? '创作任务已停止' : '创作任务失败');
+    expect(html).toContain('本步骤选用的 Skill · 结尾');
+    expect(html).toContain('已读 1 个文件');
+    expect(html).toContain('>references/ending.md<');
+    expect(html).toContain(file.content);
+  });
+
+  it('shows only the recorded paths and matching revision for a legacy task without content snapshots', () => {
+    const context = setup(), { job, store } = context;
+    const skill = store.state.skills[0];
+    skill.revisions.push({ version: 'old', savedAt: job.createdAt, files: [
+      { path: 'SKILL.md', content: '历史版本的规则' }, { path: 'unused.md', content: '未读取的资料' },
+    ] });
+    skill.files = [{ path: 'SKILL.md', content: '新版本的规则' }];
+    job.steps[0].execution = { summary: '', startedAt: job.createdAt, skills: [
+      { id: skill.id, name: skill.name, version: 'old', files: ['SKILL.md'] },
+    ] };
+    const html = renderSkillActivity(context, [`skill-${skill.id}`, 'SKILL.md']);
+    expect(html).toContain('>SKILL.md<');
+    expect(html).toContain('历史版本的规则');
+    expect(html).not.toContain('新版本的规则');
+    expect(html).not.toContain('unused.md');
+  });
+});
+
 describe('writing chat entry and results', () => {
   it('shows the saved reasoning effort in the composer without a task settings drawer', () => {
     const { project, store } = setup();

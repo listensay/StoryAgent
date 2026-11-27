@@ -4,9 +4,10 @@ import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNa
 import { normalizeImageSelection } from './coverData';
 import { hasActiveRequests, loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
-import { buildPrompt, prepareAnalysis, prepareSkillExtraction, skillResourceSelections, synthesisSteps } from './prompts';
+import { buildPrompt, prepareAnalysis, prepareSkillExtraction, synthesisSteps } from './prompts';
 import { generateSkillComposition, generateSkillResearch, skillSnapshot } from './skillExtraction';
 import { selectSkillResources } from './skillResources';
+import { createWritingSkillTools } from './writingSkillTools';
 import { publishJobOutput } from './jobOutput';
 import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep } from './jobWorkflow';
@@ -123,27 +124,29 @@ export function useWorkspace() {
             const baseOutput = job.creationTask || job.planningChat || job.novelChat || ['memory', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
             const effectiveJob = { ...job, kind: effectiveKind }, effectiveStep = { ...writingStep(job, step), output: baseOutput };
             commit(s => { const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id); if (part) part.status = 'running'; });
-            const selectionRequest = (system: string, user: string) => generate(provider!, config, system, user, signal, () => {});
-            let resourceSelections: Record<string, Skill['files']> | undefined, trainingResources: Skill['files'] | undefined;
+            const writing = !job.creationTask && ['draft', 'continue', 'rewrite', 'review', 'plan'].includes(job.kind) && !!step.chapterId;
+            const idleTimeoutMs = writing ? 120_000 : undefined;
+            const selectionRequest = (system: string, user: string) => generate(provider!, config, system, user, signal, () => {}, undefined, idleTimeoutMs);
+            let trainingResources: Skill['files'] | undefined;
             if (job.training) {
               const selection = trainingResourceSelection(job, step);
               if (selection) trainingResources = await selectSkillResources(selection.files, selection.task, selection.query, config.contextChars, signal, selectionRequest);
-            } else if (!job.creationTask) {
-              const selections = skillResourceSelections(current, effectiveJob, effectiveStep);
-              if (selections.length) {
-                resourceSelections = {};
-                for (const selection of selections) resourceSelections[selection.id] = await selectSkillResources(selection.files, effectiveKind, selection.query, config.contextChars, signal, selectionRequest);
-              }
             }
-            const prompt: { system: string; user: string; skills?: NonNullable<Job['steps'][number]['execution']>['skills'] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step, trainingResources) : buildPrompt(current, effectiveJob, effectiveStep, config, resourceSelections);
+            const prompt: { system: string; user: string; skills?: NonNullable<Job['steps'][number]['execution']>['skills']; toolSkills?: Skill[] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step, trainingResources) : buildPrompt(current, effectiveJob, effectiveStep, config);
             if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('任务材料超过上下文上限，请调整 AI 上下文或缩小样本');
-            const writing = !job.creationTask && ['draft', 'continue', 'rewrite', 'review', 'plan'].includes(job.kind) && !!step.chapterId;
-            let output = baseOutput, reasoning = step.reasoning ?? '', last = 0;
+            let output = baseOutput, reasoning = step.reasoning ?? '';
+            let previewTimer: ReturnType<typeof setTimeout> | undefined;
             const publish = () => {
               if (!mounted.current || generation.current !== epoch) return;
               const next = publishJobOutput(stateRef.current, id, step.id, output, writing ? reasoning : undefined);
               if (next === stateRef.current) return;
               stateRef.current = next; setState(next); setSaveStatus('保存中');
+            };
+            // Publish the leading update and flush the latest text even if the stream goes quiet.
+            const schedulePreview = () => {
+              if (previewTimer !== undefined) return;
+              publish();
+              previewTimer = setTimeout(() => { previewTimer = undefined; publish(); }, 80);
             };
             commit(s => {
               const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id);
@@ -152,8 +155,20 @@ export function useWorkspace() {
                 if (writing) part.execution = { summary: writingExecutionSummary(job, step), skills: prompt.skills ?? [], startedAt: now() };
               }
             });
+            const tools = prompt.toolSkills?.length ? createWritingSkillTools(prompt.toolSkills, (skillId, file) => {
+              if (signal.aborted) return;
+              commit(s => {
+                const entry = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id)?.execution?.skills.find(skill => skill.id === skillId);
+                if (!entry) return;
+                if (!entry.files.includes(file.path)) entry.files.push(file.path);
+                const contents = entry.contents ??= [], index = contents.findIndex(item => item.path === file.path);
+                if (index < 0) contents.push(file); else contents[index] = file;
+              });
+            }) : undefined;
             try {
-              const request = (feedback = '') => generate(provider!, config, prompt.system, prompt.user + feedback, signal, text => { output = baseOutput + text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } }, writing ? text => { reasoning = text; if (!text || Date.now() - last > 80) { last = Date.now(); publish(); } } : undefined);
+              const request = (feedback = '') => generate(provider!, config, prompt.system, prompt.user + feedback, signal,
+                text => { output = baseOutput + text; schedulePreview(); },
+                writing ? text => { if (reasoning !== text) { reasoning = text; schedulePreview(); } } : undefined, idleTimeoutMs, tools);
               const result = step.stage === 'style-research' ? await generateSkillResearch(step.section, signal, request) : step.stage === 'style-compose' && job.steps.some(part => part.research) ? await generateSkillComposition(job, signal, request) : job.training && step.stage === 'train-revise' ? await generateTrainingRevision(job, signal, request) : await request();
               signal.throwIfAborted();
               output = baseOutput + result;
@@ -177,6 +192,7 @@ export function useWorkspace() {
                 }
               });
             } catch (error) { publish(); throw error; }
+            finally { clearTimeout(previewTimer); }
           });
         },
       );
@@ -245,8 +261,7 @@ export function useWorkspace() {
       if (['draft', 'continue', 'rewrite'].includes(job.kind)) {
         for (const step of job.steps.filter(step => ['plan', 'draft', 'continue', 'rewrite'].includes(step.stage ?? ''))) {
           const writingJob = { ...job, kind: step.stage as TaskKind }, target = writingStep(job, step);
-          const resources = Object.fromEntries(skillResourceSelections(current, writingJob, target).map(({ id }) => [id, []]));
-          buildPrompt(current, writingJob, target, config, resources);
+          buildPrompt(current, writingJob, target, config);
         }
       }
     }

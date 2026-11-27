@@ -20,6 +20,30 @@ function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+// One inactivity budget covers the request and its automatic retries. An unresponsive
+// native invoke must not keep the chapter locked after a timeout or a manual stop.
+export async function withAIIdleTimeout<T>(signal: AbortSignal, timeoutMs: number, run: (signal: AbortSignal, progress: () => void) => Promise<T>): Promise<T> {
+  signal.throwIfAborted();
+  const controller = new AbortController();
+  let rejectWait!: (reason: unknown) => void;
+  const interrupted = new Promise<never>((_, reject) => { rejectWait = reject; });
+  const stop = (reason: unknown) => { controller.abort(reason); rejectWait(reason); };
+  const cancel = () => stop(signal.reason);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const progress = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => stop(new Error('模型长时间未返回新内容，可继续生成或更换模型')), timeoutMs);
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    progress();
+    return await Promise.race([interrupted, run(controller.signal, progress)]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
 export async function withAIRetry<T>(provider: Provider, signal: AbortSignal | undefined, operation: (attempt: number) => Promise<T>): Promise<T> {
   const maxRetries = provider.maxRetries ?? DEFAULT_AI_RETRIES;
   for (let attempt = 0; ; attempt++) {

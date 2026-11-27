@@ -173,7 +173,7 @@ describe('Skill import and history', () => {
     expect(skills).toHaveLength(1);
     expect(skills[0].files.map(f => f.path)).toEqual(['SKILL.md', '../_shared/craft.md', '../_shared/rules.json']);
   });
-  it('prioritizes task references beyond the first three resource files', () => {
+  it('offers enabled Skill references by path without inlining even a linked file before it is read', () => {
     const state = emptyWorkspace(), profile = config(); state.skills = parseSkills([
       { path: 'write/SKILL.md', content: skillText + '\n修改正文时阅读 `references/revision.md`。' },
       ...Array.from({ length: 4 }, (_, i) => ({ path: `write/references/other-${i}.md`, content: '无关资源'.repeat(200) })),
@@ -181,7 +181,10 @@ describe('Skill import and history', () => {
     ], 'file');
     const project = newProject('修订', 'long'); project.chapters[0].content = '正文'; state.projects.push(project);
     const job = createJob(project, 'rewrite', profile, project.chapters[0].id, '保持事实');
-    expect(buildPrompt(state, job, job.steps[0], profile).system).toContain('修订必须保留人物已经知道的事实');
+    const prompt = buildPrompt(state, job, job.steps[0], profile);
+    expect(prompt.system).not.toContain('修订必须保留人物已经知道的事实');
+    expect(prompt.toolSkills?.[0].files.some(file => file.path === 'references/revision.md')).toBe(true);
+    expect(prompt.skills[0]).toMatchObject({ automatic: true, files: ['SKILL.md'] });
   });
 });
 describe('protocol request and streaming', () => {

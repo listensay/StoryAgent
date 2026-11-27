@@ -1,0 +1,41 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { Skill } from './domain';
+import { createWritingSkillTools } from './writingSkillTools';
+
+function setup() {
+  const files = Array.from({ length: 414 }, (_, i) => ({ path: `references/${i}.md`, content: `# ${i === 413 ? '老祖藏手机' : '远行'}\n\n适用情境：掩饰。\n\n### 示例\n秘密${i}` }));
+  files.push({ path: 'scripts/run.py', content: '不可读' });
+  const skill = { id: 'book', files } as Skill, read = vi.fn();
+  const tools = createWritingSkillTools([skill], read);
+  const search = (query: string, budget = 6000) => JSON.parse(tools.execute('search_skill_files', { skill: 'book', query }, budget));
+  return { tools, files, read, search };
+}
+
+describe('写作 Skill 只读工具', () => {
+  it('414 条目录也只返回短名单；候选摘要不是文件读取', () => {
+    const { search, read } = setup();
+    expect(search('掩饰').matches).toHaveLength(8);
+    const found = search('老祖藏手机').matches;
+    expect(found[0].path).toBe('references/413.md'); expect(found[0].summary).not.toContain('秘密');
+    expect(search('乌龟').matches).toEqual([]); expect(read).not.toHaveBeenCalled();
+  });
+  it('只读取所选 Skill 快照里的文本资源；无效请求不计作读取', () => {
+    const { tools, read } = setup();
+    for (const [skill, path] of [['other','references/0.md'], ['book','/etc/passwd'], ['book','../references/0.md'], ['book','scripts/run.py']]) {
+      expect(JSON.parse(tools.execute('read_skill_file', { skill, path }, 2000))).toHaveProperty('error');
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('按页回传真实片段，转义后仍在预算内；重复或交叠的读取不重复记录', () => {
+    const { tools, read, files } = setup();
+    const file = files[0]; file.content = '"\\\n'.repeat(200);
+    const page = (offset: number) => {
+      const result = tools.execute('read_skill_file', { skill: 'book', path: file.path, offset }, 128);
+      expect(result.length).toBeLessThanOrEqual(128); return JSON.parse(result);
+    };
+    const first = page(0); expect(first.nextOffset).toBe(first.content.length); expect(first.nextOffset).toBeGreaterThan(0);
+    page(0); expect(read).toHaveBeenCalledTimes(1);
+    const second = page(first.nextOffset - 2);
+    expect(read.mock.lastCall).toEqual(['book', { path: file.path, content: file.content.slice(0, second.nextOffset) }]);
+  });
+});

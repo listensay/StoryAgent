@@ -52,6 +52,57 @@ describe('当前章节任务与列表清空', () => {
     expect(job.steps.every(step => step.chapterId === chapter.id)).toBe(true);
     expect(store.stateRef.current.projects[0].chapters).toEqual(project.chapters);
   });
+  it('推理后立刻到达的首段正文无需等待下一个分片，完成后不会被延迟刷新覆盖', async () => {
+    mount();
+    const project = store.stateRef.current.projects[0], chapter = project.chapters[1];
+    project.genre = '悬疑'; chapter.plan = '推门';
+    let finish!: (text: string) => void;
+    vi.mocked(generate).mockImplementationOnce(async (_provider, _config, _system, _user, _signal, onText, onReasoning, timeout) => {
+      expect(timeout).toBe(120_000);
+      onReasoning?.('分析'); onText('门开了。');
+      return new Promise(resolve => { finish = resolve; });
+    }).mockResolvedValueOnce('本章摘要').mockResolvedValueOnce('{"summary":"摘要","notes":[]}');
+    const id = store.launch({ kind: 'draft', projectId: project.id, chapterId: chapter.id });
+    const job = () => store.stateRef.current.jobs.find(item => item.id === id)!;
+    vi.mocked(loadWorkspace).mockResolvedValue(store.stateRef.current);
+    for (const effect of harness.effects) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); await Promise.resolve(); }
+    await vi.advanceTimersByTimeAsync(80);
+    expect(job().steps[0]).toMatchObject({ status: 'running', output: '门开了。', reasoning: '分析' });
+    finish('门开了。风吹进来。');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(job().status).toBe('ready');
+    expect(job().steps[0]).toMatchObject({ output: '门开了。风吹进来。', status: 'ready' });
+    expect(job().steps.every(step => step.chapterId === chapter.id)).toBe(true);
+  });
+  it('改写首轮携带原文和 Skill；查询候选不记为已读，读过的片段在失败后仍保留', async () => {
+    mount(); const state = store.stateRef.current, project = state.projects[0], chapter = project.chapters[1];
+    project.genre = '修仙'; const skill = { ...state.skills[0], id: 'voice', tasks: ['rewrite' as const], resourceMode: 'relevant' as const, files: [{ path: 'SKILL.md', content: '保留人物言行反差。' }, { path: 'references/a.md', content: '对白：他划了两下屏幕。' }, { path: 'references/b.md', content: '对白：未读取的候选。' }] };
+    state.skills.push(skill); project.skillIds = [skill.id];
+    vi.mocked(generate).mockImplementationOnce(async (_p, _c, system, user, _s, _out, _thinking, _timeout, tools) => {
+      expect(system).toContain(skill.files[0].content); expect(user).toContain(chapter.content);
+      expect(system + user).not.toContain('未读取的候选'); expect(system + user).not.toContain('当前创作任务：');
+      const summary = tools!.execute('search_skill_files', { skill: skill.id, query: '对白' }, 2000);
+      expect(summary).toContain('references/b.md');
+      expect(record().files).toEqual(['SKILL.md']);
+      tools!.execute('read_skill_file', { skill: skill.id, path: 'references/a.md' }, 2000);
+      expect(record().files).toEqual(['SKILL.md', 'references/a.md']);
+      throw new Error('模拟断线');
+    });
+    const id = store.launch({ kind: 'rewrite', projectId: project.id, chapterId: chapter.id });
+    const job = () => store.stateRef.current.jobs.find(item => item.id === id)!;
+    const record = () => job().steps[0].execution!.skills.find(item => item.id === skill.id)!;
+    vi.mocked(loadWorkspace).mockResolvedValue(store.stateRef.current);
+    for (const effect of harness.effects) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); await Promise.resolve(); }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(generate).toHaveBeenCalledTimes(1); expect(job().error).toBe('模拟断线');
+    expect(record().contents).toEqual(skill.files.slice(0, 2));
+  });
+  it('改写缺少正文时不空发请求', () => {
+    mount(); const project = store.stateRef.current.projects[0], chapter = project.chapters[1];
+    project.genre = '修仙'; chapter.content = '  ';
+    expect(() => store.launch({ kind: 'rewrite', projectId: project.id, chapterId: chapter.id })).toThrow('暂无可改写的正文');
+    expect(generate).not.toHaveBeenCalled();
+  });
   it.each(chapterWritingKinds)('%s 缺少或移除当前章节时不创建任务', kind => {
     mount(); const project = store.stateRef.current.projects[0]; project.genre = '悬疑';
     expect(() => store.launch({ kind, projectId: project.id })).toThrow('当前章节');

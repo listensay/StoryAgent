@@ -49,7 +49,7 @@ export async function http(request: Request): Promise<{ text: string; bytes: Uin
   const id = uid();
   const decoder = new TextDecoder();
   const unlisten = request.onChunk ? await listen<{ id: string; bytes: number[] }>('http-chunk', event => { if (event.payload.id === id) request.onChunk?.(decoder.decode(new Uint8Array(event.payload.bytes), { stream: true })); }) : () => {};
-  const abort = () => { void invoke('cancel_http', { id }); };
+  const abort = () => { void invoke('cancel_http', { id }).catch(() => {}); };
   request.signal?.addEventListener('abort', abort, { once: true });
   try {
     request.signal?.throwIfAborted();

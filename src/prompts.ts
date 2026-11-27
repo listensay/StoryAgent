@@ -4,9 +4,10 @@ import novelAssistantSkill from './skills/novel-assistant/SKILL.md?raw';
 import { novelContext } from './novelAssistant';
 import { planningContext, planningRules } from './planning';
 import { resourcePaths } from './skills';
+import { isSkillReference } from './writingSkillTools';
 import { resolveCharacterRelation } from './characterRelations';
 import { researchExtractionRules } from './skillExtraction';
-import { fitSkillResources, relevantSkillResources, skillApplicationRules } from './skillResources';
+import { relevantSkillResources, skillApplicationRules } from './skillResources';
 
 export function numberedText(text: string) { return text.split(/\n\s*\n|\n/).filter(s => s.trim()).map((s, index) => `[P${index + 1}] ${s}`).join('\n\n'); }
 export function sourceChunks(text: string, limit: number): string[] {
@@ -134,17 +135,9 @@ function skillResourceQuery(job: Job, step: JobStep) {
   const manuscript = ['continue', 'rewrite', 'review'].includes(job.kind) ? step.selection || step.baseContent.slice(-6000) : '';
   return [job.instruction, step.title, step.basePlan, manuscript].filter(Boolean).join('\n');
 }
-export function skillResourceSelections(state: Workspace, job: Job, step: JobStep) {
-  if (!['draft', 'continue', 'rewrite', 'review', 'plan'].includes(job.kind)) return [];
-  const project = state.projects.find(project => project.id === job.projectId);
-  const chosen = job.skillIds ?? project?.skillIds ?? [];
-  const query = skillResourceQuery(job, step);
-  const characters = project?.notes.filter(note => note.kind === 'character' && query.includes(note.title)).map(note => `${note.title}：${note.body}`).join('\n').slice(0, 3000) ?? '';
-  const context = [project && `题材：${project.genre}\n表达基调：${project.theme}`, characters, query].filter(Boolean).join('\n');
-  return state.skills.filter(skill => chosen.includes(skill.id) && skill.resourceMode === 'relevant' && skill.tasks.includes(job.kind)).map(skill => ({ id: skill.id, files: skill.files, query: context }));
-}
-export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: AIConfig, resourceSelections?: Record<string, Skill['files']>): { system: string; user: string; skills: NonNullable<JobStep['execution']>['skills'] } {
+export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: AIConfig): { system: string; user: string; skills: NonNullable<JobStep['execution']>['skills']; toolSkills?: Skill[] } {
   const project = state.projects.find(p => p.id === job.projectId);
+  if (job.kind === 'rewrite' && !step.baseContent.trim() && !step.selection.trim()) throw new Error('本章暂无可改写的正文，请先采用生成稿或填写正文');
   const withResearch = job.steps.some(part => part.stage === 'style-research');
   const outputRules: Record<Job['kind'], string> = {
     revise: '按小说 AI Skill 的内容接口返回合法 JSON，一次提供所有受影响内容的修改方案。',
@@ -204,54 +197,62 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
   // Explicit choices keep complete definitions. A tiny built-in must not take
   // half the budget and silently erase the author's dialogue/style rules.
   const selectedSkills = skills.filter(skill => chosenSkills.includes(skill.id));
+  const chapterWriting = !!step.chapterId && ['draft', 'continue', 'rewrite', 'plan', 'review'].includes(job.kind);
+  const toolSkills = chapterWriting ? selectedSkills.filter(skill => skill.files.some(isSkillReference)) : [];
+  const generalSkills = skills.filter(skill => !chosenSkills.includes(skill.id));
+  if (toolSkills.length || (chapterWriting && generalSkills.some(skill => skill.files.some(isSkillReference)))) system += '\n按已选 Skill 的入口规则处理当前章节。需要具体写法时，按 Skill ID 搜索并读取参考文件；搜索命中只是候选，不必通读目录。';
   const loadedSkills: NonNullable<JobStep['execution']>['skills'] = [];
   const contextReserve = project && !job.novelChat ? Math.min(8000, Math.floor(config.contextChars * .3)) : 300;
   const selectedEntries = selectedSkills.map(skill => {
     const definition = skill.files.find(file => /(^|\/)SKILL\.md$/i.test(file.path));
     if (!definition?.content.trim()) throw new Error(`Skill「${skill.name}」缺少 SKILL.md`);
     const links = resourcePaths(definition.content);
-    const resources = skill.resourceMode === 'relevant' ? [] : skill.files.filter(file => !/SKILL\.md$/i.test(file.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path) && (links.some(path => file.path === path || file.path.endsWith('/' + path)) || taskTerms[job.kind].test(file.path)));
+    const resources = chapterWriting || skill.resourceMode === 'relevant' ? [] : skill.files.filter(file => !/SKILL\.md$/i.test(file.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path) && (links.some(path => file.path === path || file.path.endsWith('/' + path)) || taskTerms[job.kind].test(file.path)));
     return { skill, definition, resources };
   });
-  const selectedText = () => selectedEntries.map(({ skill, definition, resources }) => `\n<skill name=${JSON.stringify(skill.name)} source="作者选用">\n${definition.content}${resources.map(file => `\n资料 ${file.path}：\n${file.content}`).join('')}\n</skill>`).join('');
+  const selectedText = () => selectedEntries.map(({ skill, definition, resources }) => `\n<skill id=${JSON.stringify(skill.id)} name=${JSON.stringify(skill.name)} source="作者选用">\n${definition.content}${resources.map(file => `\n资料 ${file.path}：\n${file.content}`).join('')}\n</skill>`).join('');
   let selectedRules = selectedText();
   if (selectedRules && required.length + system.length + selectedRules.length + contextReserve > config.contextChars) throw new Error('所选 Skill 与任务材料超过上下文上限，请减少所选 Skill 或增大 AI 上下文');
-  const progressive = selectedEntries.filter(entry => entry.skill.resourceMode === 'relevant');
+  const progressive = selectedEntries.filter(entry => !chapterWriting && entry.skill.resourceMode === 'relevant');
   const query = skillResourceQuery(job, step);
   for (const [index, entry] of progressive.entries()) {
     const budget = Math.floor((config.contextChars - required.length - system.length - selectedRules.length - contextReserve) / (progressive.length - index));
-    const selected = resourceSelections?.[entry.skill.id];
-    entry.resources = selected ? fitSkillResources(selected, budget) : relevantSkillResources(entry.skill.files, job.kind, query, budget);
-    if (!entry.resources.length && (selected ? selected.length : entry.skill.files.some(file => /^references\/(?!index\.md)/.test(file.path)))) throw new Error(`所选 Skill「${entry.skill.name}」的写法资源超过上下文上限，请增大 AI 上下文`);
+    entry.resources = relevantSkillResources(entry.skill.files, job.kind, query, budget);
+    if (!entry.resources.length && entry.skill.files.some(file => /^references\/(?!index\.md)/.test(file.path))) throw new Error(`所选 Skill「${entry.skill.name}」的写法资源超过上下文上限，请增大 AI 上下文`);
     selectedRules = selectedText();
   }
   for (const { skill, definition, resources } of selectedEntries) loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: [definition.path, ...resources.map(file => file.path)], contents: [definition, ...resources].map(({ path, content }) => ({ path, content })) });
   let available = Math.max(0, Math.min(Math.floor(config.contextChars * .22), config.contextChars - required.length - system.length - selectedRules.length - contextReserve));
-  const generalSkills = skills.filter(skill => !chosenSkills.includes(skill.id));
   for (const [index, skill] of generalSkills.entries()) {
     if (available < 100) break;
     const budget = Math.floor(available / (generalSkills.length - index));
     const definition = skill.files.find(f => /(^|\/)SKILL\.md$/i.test(f.path))?.content ?? '';
     const terms = taskTerms[job.kind], links = resourcePaths(definition);
-    const resources = skill.files.filter(f => !/SKILL\.md$/i.test(f.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(f.path)).map(f => ({ ...f, score: (links.some(path => f.path === path || f.path.endsWith('/' + path)) ? 2 : 0) + (terms.test(f.path) ? 4 : 0) })).sort((a, b) => b.score - a.score);
-    const header = `\n<skill name=${JSON.stringify(skill.name)}>\n`, footer = '\n</skill>';
+    const resources = chapterWriting ? [] : skill.files.filter(f => !/SKILL\.md$/i.test(f.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(f.path)).map(f => ({ ...f, score: (links.some(path => f.path === path || f.path.endsWith('/' + path)) ? 2 : 0) + (terms.test(f.path) ? 4 : 0) })).sort((a, b) => b.score - a.score);
+    const header = `\n<skill id=${JSON.stringify(skill.id)} name=${JSON.stringify(skill.name)}>\n`, footer = '\n</skill>';
     const contentBudget = Math.max(0, budget - header.length - footer.length);
+    if (contentBudget < 30) continue;
     const rules = excerpt(definition, Math.floor(contentBudget * (resources.length ? .5 : 1)), terms);
     let remaining = contentBudget - rules.length, materials = '';
-    const loadedFiles = skill.files.filter(file => /(^|\/)SKILL\.md$/i.test(file.path)).map(file => file.path);
+    const entry = skill.files.find(file => /(^|\/)SKILL\.md$/i.test(file.path));
+    const contents = entry && rules ? [{ path: entry.path, content: rules }] : [];
     for (const file of resources) {
       const label = `\n资料 ${file.path}：\n`;
       if (remaining < label.length + 60) break;
       const content = excerpt(file.content, Math.min(remaining - label.length, Math.max(200, Math.floor(contentBudget * .3))), terms);
       materials += label + content; remaining -= label.length + content.length;
-      loadedFiles.push(file.path);
+      contents.push({ path: file.path, content });
     }
     const section = (header + rules + materials + footer).slice(0, budget);
     system += section; available -= section.length;
-    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: loadedFiles, contents: loadedFiles.map(path => ({ path, content: skill.files.find(file => file.path === path)!.content })) });
+    if (chapterWriting && skill.files.some(isSkillReference)) toolSkills.push(skill);
+    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, automatic: true, files: contents.map(file => file.path), contents });
   }
   system += selectedRules;
-  let contextBudget = Math.max(0, config.contextChars - system.length - required.length - 100);
+  // Leave space for native tool schemas, result pages and conversation history,
+  // without removing the author's instruction, selected passage or chapter source.
+  const toolReserve = toolSkills.length ? Math.min(16000, Math.floor(config.contextChars * .25)) : 0;
+  let contextBudget = Math.max(0, config.contextChars - system.length - required.length - toolReserve - 100);
   const prior = job.steps.slice(0, job.steps.findIndex(s => s.id === step.id)).filter(s => s.output && !s.intermediate && s.chapterId !== step.chapterId).slice(-2);
   const priorBudget = Math.min(12000, Math.floor(contextBudget * .2));
   const priorText = prior.length && priorBudget > 100 && ['plan', 'draft', 'continue', 'rewrite'].includes(job.kind) ? '\n此前生成的待确认草稿（尚非确认事实）：\n' + prior.map(s => {
@@ -261,7 +262,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
   }).join('\n') : '';
   contextBudget -= priorText.length;
   const context = (project && !job.novelChat ? projectContext(project, job.kind === 'draft' ? { ...step, baseContent: '' } : step, contextBudget, !!source) : '') + priorText;
-  return { system, user: task + context + source + selected + resume, skills: loadedSkills };
+  return { system, user: task + context + source + selected + resume, skills: loadedSkills, toolSkills };
 }
 function projectContext(project: Project, step: JobStep, budget: number, hasSource: boolean) {
   const index = project.chapters.findIndex(c => c.id === step.chapterId);
