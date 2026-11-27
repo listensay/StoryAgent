@@ -184,7 +184,7 @@ describe('Skill import and history', () => {
     const prompt = buildPrompt(state, job, job.steps[0], profile);
     expect(prompt.system).not.toContain('修订必须保留人物已经知道的事实');
     expect(prompt.toolSkills?.[0].files.some(file => file.path === 'references/revision.md')).toBe(true);
-    expect(prompt.skills[0]).toMatchObject({ automatic: true, files: ['SKILL.md'] });
+    expect(prompt.system).toContain('自动候选'); expect(prompt.system).not.toContain(skillText);
   });
 });
 describe('protocol request and streaming', () => {

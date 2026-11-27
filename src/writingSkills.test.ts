@@ -15,44 +15,49 @@ function setup() {
 }
 
 describe('author-selected writing skills', () => {
-  it('keeps the complete selected Skill despite short built-ins and other enabled skills', () => {
-    const { state, config, definition, job } = setup();
-    for (let i = 0; i < 8; i++) state.skills.push({ ...state.skills[1], id: `general-${i}`, tasks: ['draft'], files: [{ path: 'SKILL.md', content: '一般写作规则。'.repeat(200) }] });
+  it('advertises only metadata for both author-selected and automatically enabled skills', () => {
+    const { state, config, definition, skill, job } = setup();
+    const general = { ...state.skills[1], id: 'general', name: '自动文风', tasks: ['draft' as const], files: [{ path: 'SKILL.md', content: '自动规则正文不应出现在首轮。' }] };
+    state.skills.push(general);
     const prompt = buildPrompt(state, job, job.steps[0], config);
-    expect(prompt.system).toContain(definition);
-    expect(prompt.system.lastIndexOf(definition)).toBeGreaterThan(prompt.system.lastIndexOf('一般写作规则。'));
+    expect(prompt.system).toContain(JSON.stringify({ id: skill.id, name: skill.name, description: skill.description, source: '作者选用' }));
+    expect(prompt.system).toContain(JSON.stringify({ id: general.id, name: general.name, description: general.description, source: '自动候选' }));
+    expect(prompt.system + prompt.user).not.toContain(definition);
+    expect(prompt.system + prompt.user).not.toContain(general.files[0].content);
+    expect(prompt.toolSkills).toContain(skill); expect(prompt.toolSkills).toContain(general);
     expect(prompt.user).toContain('本章已有事件与人物关系。');
-    expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(config.contextChars);
   });
 
-  it('makes linked prose resources available to the writer without preloading their content', () => {
+  it('keeps linked resources in the tool host, not the prompt', () => {
     const { state, config, skill, job } = setup();
     skill.files[0].content += '\n参考 [对白](references/dialogue.md)。';
     const content = '人物语言规则。'.repeat(700) + '末尾的关键反例';
     skill.files.push({ path: 'references/dialogue.md', content });
     const prompt = buildPrompt(state, job, job.steps[0], config);
-    expect(prompt.system).toContain(skill.files[0].content); expect(prompt.system).not.toContain(content);
-    expect(prompt.toolSkills?.[0].files[1].content).toBe(content);
-    expect(prompt.skills.find(s => s.id === skill.id)?.files).toEqual(['SKILL.md']);
+    expect(prompt.system).not.toContain(skill.files[0].content);
+    expect(prompt.system + prompt.user).not.toContain('references/dialogue.md');
+    expect(prompt.toolSkills.find(item => item.id === skill.id)?.files[1].content).toBe(content);
   });
 
-  it('reports insufficient context instead of silently removing selected rules', () => {
-    const { state, config, job } = setup();
-    expect(() => buildPrompt(state, job, job.steps[0], { ...config, contextChars: 4000 })).toThrow('所选 Skill');
+  it('does not budget the whole entry into the first request', () => {
+    const { state, config, skill, job } = setup();
+    const prompt = buildPrompt(state, job, job.steps[0], { ...config, contextChars: 4000 });
+    expect(prompt.toolSkills).toContain(skill);
+    expect(prompt.system + prompt.user).not.toContain('关键对白规则');
   });
 
   it('respects task selection snapshots and does not leak writing style into memory', () => {
-    const { state, project, config, definition, job } = setup();
-    job.skillIds = []; expect(buildPrompt(state, job, job.steps[0], config).system).not.toContain(definition);
+    const { state, project, config, skill, job } = setup();
+    job.skillIds = []; expect(buildPrompt(state, job, job.steps[0], config).toolSkills).not.toContain(skill);
     job.skillIds = project.skillIds;
-    expect(buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config).system).not.toContain(definition);
+    expect(buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config).toolSkills).not.toContain(skill);
   });
 
   it('honors explicitly selected disabled skills without mixing other novels’ extracted styles', () => {
-    const { state, config, skill, definition, job } = setup(); skill.enabled = false;
-    state.skills.push({ ...skill, id: 'another-book', enabled: true, files: [{ path: 'SKILL.md', content: '另一部小说的独特口吻' }] });
+    const { state, config, skill, job } = setup(); skill.enabled = false;
+    state.skills.push({ ...skill, id: 'another-book', enabled: true });
     const prompt = buildPrompt(state, job, job.steps[0], config);
-    expect(prompt.system).toContain(definition); expect(prompt.system).not.toContain('另一部小说的独特口吻');
+    expect(prompt.system).toContain(skill.id); expect(prompt.system).not.toContain('another-book');
   });
 
   it('keeps distinct style evidence through every synthesis layer', () => {

@@ -223,15 +223,13 @@ describe('写作时按场景使用完整写法资源', () => {
     return { state, skill, writingConfig, writingJob };
   }
 
-  it('大目录首轮只有入口与章节，参考库留给写作模型按需读取', () => {
+  it('大目录首轮只有元数据与章节，入口和资料库留给写作模型按需读取', () => {
     const { state, skill, writingConfig, writingJob } = writing();
     const prompt = buildPrompt(state, writingJob, writingJob.steps[0], writingConfig);
     const resource = skill.files.find(file => file.path.startsWith('references/dialogue/'))!;
-    expect(prompt.system).toContain(skill.files[0].content); expect(prompt.system).not.toContain(resource.content);
+    expect(prompt.system).not.toContain(skill.files[0].content); expect(prompt.system).not.toContain(resource.content);
     expect(prompt.system.length + prompt.user.length).toBeLessThanOrEqual(writingConfig.contextChars);
-    expect(prompt.skills.find(item => item.id === skill.id)?.files).toEqual(['SKILL.md']);
-    expect(prompt.toolSkills?.[0].files).toContain(resource);
-    expect(prompt.skills.find(item => item.id === skill.id)!.files.length).toBeLessThan(skill.files.length);
+    expect(prompt.toolSkills.find(item => item.id === skill.id)?.files).toContain(resource);
   });
 
   it('大上下文也只选择少量完整写法，保留叙述、对白和节拍，不填满剩余预算', () => {
@@ -246,23 +244,22 @@ describe('写作时按场景使用完整写法资源', () => {
     expect(files).toEqual(saved);
   });
 
-  it('重新起草不带旧稿；改写首轮含完整旧稿和已选入口，不预读场景资料', () => {
+  it('重新起草不带旧稿；改写首轮含完整旧稿和 Skill ID，不预读入口和场景资料', () => {
     const { state, skill, writingConfig, writingJob } = writing();
     const step = writingJob.steps[0]; step.baseContent = '掌柜收起账簿，催买家上路。';
     const draft = buildPrompt(state, writingJob, step, writingConfig);
     const rewrite = buildPrompt(state, { ...writingJob, kind: 'rewrite' }, step, writingConfig);
     expect(draft.user).not.toContain(step.baseContent); expect(rewrite.user).toContain(step.baseContent);
-    expect(rewrite.system).toContain(skill.files[0].content); expect(rewrite.system).toContain(skill.id);
-    expect(rewrite.skills.find(item => item.id === skill.id)?.files).toEqual(['SKILL.md']);
+    expect(rewrite.system).not.toContain(skill.files[0].content); expect(rewrite.system).toContain(skill.id);
   });
-  it('大参考文件不妨碍首轮写作，模型可按页读取；未选或记忆步骤不提供工具', () => {
+  it('大参考文件不妨碍首轮写作；未选或记忆步骤不提供该小说 Skill', () => {
     const { state, skill, writingJob, writingConfig } = writing();
     skill.files.push({ path: 'references/long.md', content: '对白规则。'.repeat(5000) });
     const prompt = (job: Job) => buildPrompt(state, job, job.steps[0], writingConfig);
-    expect(prompt(writingJob).toolSkills).toEqual([skill]);
+    expect(prompt(writingJob).toolSkills).toContain(skill);
     expect(prompt(writingJob).system).not.toContain(skill.files[skill.files.length - 1].content);
-    expect(prompt({ ...writingJob, kind: 'memory' }).toolSkills).toEqual([]);
-    expect(prompt({ ...writingJob, skillIds: [] }).toolSkills).toEqual([]);
+    expect(prompt({ ...writingJob, kind: 'memory' }).toolSkills).not.toContain(skill);
+    expect(prompt({ ...writingJob, skillIds: [] }).toolSkills).not.toContain(skill);
   });
 
   it('未选用的小说写法不混入写作，记忆任务不应用文风资源', () => {

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generate } from './ai';
-import { defaultAdvanced, newAISelection, type Provider } from './domain';
+import { createJob, defaultAdvanced, emptyWorkspace, newAISelection, newProject, type Provider, type Skill } from './domain';
+import { buildPrompt } from './prompts';
+import { createWritingSkillTools } from './writingSkillTools';
 import { READY_TO_WRITE } from './toolGeneration';
 import { HttpError, http } from './platform';
 import { invoke } from '@tauri-apps/api/core';
@@ -71,9 +73,9 @@ describe.each(protocols)('%s 原生写作工具', protocol => {
     expect(request.onChunk).toBeUndefined(); expect(last.onChunk).toBeTypeOf('function');
     expect(request.providerId).toBe('p'); expect(last.headers).toEqual(request.headers);
     const defs = protocol === 'gemini' ? first.tools[0].functionDeclarations : protocol === 'chat' ? first.tools.map((x: Json) => x.function) : first.tools;
-    expect(defs.map((d: Json) => d.name)).toEqual([search.name, read.name]);
+    expect(defs.map((d: Json) => d.name)).toEqual(['activate_skill', search.name, read.name]);
     expect(defs.every((d: Json) => d.description.includes('首轮提示中的 Skill ID'))).toBe(true);
-    expect((defs[1].parameters ?? defs[1].input_schema).required).toEqual(['skill', 'path']);
+    expect((defs[2].parameters ?? defs[2].input_schema).required).toEqual(['skill', 'path']);
     expect(execute.mock.calls.map(([name, args]) => [name, args])).toEqual([[search.name, search.args], [read.name, read.args]]);
     expect(execute.mock.calls.every(([, , limit]) => limit >= 128 && limit <= 6000)).toBe(true);
     const h = history(protocol, follow), finalHistory = history(protocol, final);
@@ -111,6 +113,45 @@ describe.each(protocols)('%s 原生写作工具', protocol => {
     vi.mocked(http).mockResolvedValueOnce(response(events(protocol).join('')));
     expect(await generate(provider(protocol), config, system, user, signal(), vi.fn())).toBe('开头结尾');
     expect(bodies()[0]).not.toHaveProperty('tools'); expect(vi.mocked(http).mock.calls[0][0].onChunk).toBeTypeOf('function');
+  });
+});
+
+describe('Skill 逐步加载', () => {
+  it('细纲的 Chat Completions 首包无 Skill 正文，两份入口仅通过匹配的工具回复传回', async () => {
+    const state = emptyWorkspace(), project = newProject('试写', 'long');
+    const skill = (id: string, content: string): Skill => ({ ...state.skills[0], id, name: id, description: id + ' 简介', tasks: ['plan'], files: [{ path: 'SKILL.md', content }] });
+    const selected = skill('style', '作者选用的入口正文'), automatic = skill('natural', '自动候选的入口正文');
+    state.skills = [selected, automatic]; state.projects.push(project); project.skillIds = [selected.id];
+    const job = createJob(project, 'plan', config, project.chapters[0].id, '情节搞笑');
+    const prompt = buildPrompt(state, job, job.steps[0], config), onRead = vi.fn();
+    const activate = (id: string) => ({ id: `call-${id}`, name: 'activate_skill', args: { skill: id } });
+    vi.mocked(http).mockResolvedValueOnce(json(assistant('chat', [activate(selected.id)])))
+      .mockResolvedValueOnce(json(assistant('chat', [activate(automatic.id)])))
+      .mockResolvedValueOnce(json(prose('chat', READY_TO_WRITE)))
+      .mockResolvedValueOnce(response(events('chat').join('')));
+    expect(await generate(provider('chat'), config, prompt.system, prompt.user, signal(), vi.fn(), undefined, undefined,
+      createWritingSkillTools(prompt.toolSkills, onRead, [selected.id]))).toBe('开头结尾');
+    const [first, second, third, final] = bodies();
+    expect(first.tool_choice).toEqual({ type: 'function', function: { name: 'activate_skill' } });
+    expect(first.messages.map((message: Json) => message.role)).toEqual(['system', 'user']);
+    expect(second.tool_choice).toBe('auto');
+    for (const item of [selected, automatic]) {
+      expect(first.messages[0].content).toContain(item.description);
+      expect(JSON.stringify(first)).not.toContain(item.files[0].content);
+      expect(final.messages[0].content).not.toContain(item.files[0].content);
+      const call = third.messages.find((message: Json) => message.tool_call_id === `call-${item.id}`);
+      expect(call.role).toBe('tool'); expect(JSON.parse(call.content)).toEqual({ ...item.files[0], nextOffset: null });
+    }
+    expect(onRead.mock.calls.map(([id]) => id)).toEqual([selected.id, automatic.id]);
+    expect(final.tool_choice).toBe('none');
+  });
+
+  it('选用的 Skill 未被调用时阻止生成，不回退到全文注入', async () => {
+    vi.mocked(http).mockResolvedValueOnce(json(prose('chat', '未激活就写的正文')));
+    const onText = vi.fn(), execute = vi.fn();
+    await expect(generate(provider('chat'), config, system, user, signal(), onText, undefined, undefined,
+      { execute, pendingRequired: () => ['作者选用的文风'] })).rejects.toThrow('未完成 Skill 激活');
+    expect(http).toHaveBeenCalledTimes(1); expect(execute).not.toHaveBeenCalled(); expect(onText).not.toHaveBeenCalled();
   });
 });
 

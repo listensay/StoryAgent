@@ -74,13 +74,17 @@ describe('当前章节任务与列表清空', () => {
     expect(job().steps[0]).toMatchObject({ output: '门开了。风吹进来。', status: 'ready' });
     expect(job().steps.every(step => step.chapterId === chapter.id)).toBe(true);
   });
-  it('改写首轮携带原文和 Skill；查询候选不记为已读，读过的片段在失败后仍保留', async () => {
+  it('改写首轮只发送 Skill 元数据；执行记录只保存实际读取的文件', async () => {
     mount(); const state = store.stateRef.current, project = state.projects[0], chapter = project.chapters[1];
     project.genre = '修仙'; const skill = { ...state.skills[0], id: 'voice', tasks: ['rewrite' as const], resourceMode: 'relevant' as const, files: [{ path: 'SKILL.md', content: '保留人物言行反差。' }, { path: 'references/a.md', content: '对白：他划了两下屏幕。' }, { path: 'references/b.md', content: '对白：未读取的候选。' }] };
     state.skills.push(skill); project.skillIds = [skill.id];
     vi.mocked(generate).mockImplementationOnce(async (_p, _c, system, user, _s, _out, _thinking, _timeout, tools) => {
-      expect(system).toContain(skill.files[0].content); expect(user).toContain(chapter.content);
-      expect(system + user).not.toContain('未读取的候选'); expect(system + user).not.toContain('当前创作任务：');
+      expect(system).toContain(skill.id); expect(user).toContain(chapter.content);
+      expect(system + user).not.toContain(skill.files[0].content); expect(system + user).not.toContain('未读取的候选');
+      expect(record()).toBeUndefined();
+      expect(tools!.pendingRequired?.()).toContain(skill.name);
+      tools!.execute('activate_skill', { skill: skill.id }, 2000);
+      expect(tools!.pendingRequired?.()).toEqual([]);
       const summary = tools!.execute('search_skill_files', { skill: skill.id, query: '对白' }, 2000);
       expect(summary).toContain('references/b.md');
       expect(record().files).toEqual(['SKILL.md']);

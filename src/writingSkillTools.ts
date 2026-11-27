@@ -2,13 +2,19 @@ import type { Skill } from './domain';
 import type { WritingTools } from './toolGeneration';
 
 type File = Skill['files'][number];
-export const isSkillReference = (file: File) => !/(^|\/)SKILL\.md$/i.test(file.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path);
+const isSkillEntry = (file: File) => /(^|\/)SKILL\.md$/i.test(file.path);
+export const skillEntry = (skill: Skill) => skill.files.find(isSkillEntry);
+const isSkillReference = (file: File) => !isSkillEntry(file) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path);
 const fail = (message: string) => JSON.stringify({ error: message });
 
 // Virtual files only: exact matches against the selected Skill snapshot. No host
 // filesystem, path resolution, scripts, external URLs, or other workspace data.
-export function createWritingSkillTools(skills: Skill[], onRead: (id: string, file: File) => void): WritingTools {
-  const libraries = new Map(skills.map(skill => [skill.id, skill.files.filter(isSkillReference)]));
+export function createWritingSkillTools(skills: Skill[], onRead: (id: string, file: File) => void, requiredIds: string[] = []): WritingTools {
+  const libraries = new Map(skills.map(skill => [skill.id, {
+    entry: skillEntry(skill), refs: skill.files.filter(isSkillReference), name: skill.name,
+  }]));
+  const active = new Set<string>();
+  const pendingRequired = () => requiredIds.filter(id => !active.has(id)).map(id => libraries.get(id)?.name ?? id);
   const pages = new Map<File, { start: number; end: number }[]>();
   function record(id: string, file: File, start: number, end: number) {
     const ranges = pages.get(file) ?? [];
@@ -22,11 +28,33 @@ export function createWritingSkillTools(skills: Skill[], onRead: (id: string, fi
     pages.set(file, merged);
     onRead(id, { path: file.path, content: merged.map(r => file.content.slice(r.start, r.end)).join('\n[…]\n') });
   }
-  return { execute(name, args, maxChars) {
-    if (!args || typeof args !== 'object') return fail('无效参数');
+  function page(id: string, file: File, offset: unknown, maxChars: number) {
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > file.content.length) return fail('读取位置无效');
+    const result = (size: number) => JSON.stringify({ path: file.path, content: file.content.slice(offset, offset + size), nextOffset: offset + size < file.content.length ? offset + size : null });
+    let lo = 0, hi = Math.min(maxChars, file.content.length - offset);
+    while (lo < hi) { const n = Math.ceil((lo + hi) / 2); if (result(n).length <= maxChars) lo = n; else hi = n - 1; }
+    if (!lo && offset < file.content.length) return fail('剩余上下文不足');
+    const output = result(lo);
+    if (output.length > maxChars) return fail('剩余上下文不足');
+    if (lo || !file.content.length) record(id, file, offset, offset + lo);
+    return output;
+  }
+  return { pendingRequired, execute(name, args, maxChars) {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return fail('无效参数');
     const { skill, path, query, offset = 0 } = args as Record<string, unknown>;
-    const files = typeof skill === 'string' && libraries.get(skill);
-    if (!files || typeof skill !== 'string') return fail('未选用此 Skill');
+    if (typeof skill !== 'string') return fail('请提供 Skill ID');
+    const library = libraries.get(skill);
+    if (!library) return fail('此 Skill 不在当前目录');
+    if (name === 'activate_skill') {
+      const file = library.entry;
+      if (!file?.content.trim()) return fail('缺少有效的 SKILL.md');
+      const output = page(skill, file, offset, maxChars);
+      const ranges = pages.get(file);
+      if (ranges?.[0]?.start === 0 && ranges[0].end === file.content.length) active.add(skill);
+      return output;
+    }
+    if (!active.has(skill)) return fail('请先调用 activate_skill，完整读取 SKILL.md');
+    const files = library.refs;
     if (name === 'search_skill_files') {
       if (typeof query !== 'string' || !query.trim() || query.length > 160) return fail('请输入简短关键词或目录名');
       const terms = query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
@@ -47,13 +75,6 @@ export function createWritingSkillTools(skills: Skill[], onRead: (id: string, fi
     }
     if (name !== 'read_skill_file') return fail('未知工具');
     const file = files.find(f => f.path === path);
-    if (!file) return fail('该 Skill 没有此资料文件');
-    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > file.content.length) return fail('读取位置无效');
-    const result = (size: number) => JSON.stringify({ content: file.content.slice(offset, offset + size), nextOffset: offset + size < file.content.length ? offset + size : null });
-    let lo = 0, hi = Math.min(maxChars, file.content.length - offset);
-    while (lo < hi) { const n = Math.ceil((lo + hi) / 2); if (result(n).length <= maxChars) lo = n; else hi = n - 1; }
-    if (!lo && offset < file.content.length) return fail('剩余上下文不足');
-    if (lo || !file.content.length) record(skill, file, offset, offset + lo);
-    return result(lo);
+    return file ? page(skill, file, offset, maxChars) : fail('该 Skill 没有此资料文件');
   } };
 }

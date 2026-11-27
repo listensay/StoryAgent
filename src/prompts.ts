@@ -3,11 +3,10 @@ import { noteNames, taskNames, uid, type Workspace, type Project, type Job, type
 import novelAssistantSkill from './skills/novel-assistant/SKILL.md?raw';
 import { novelContext } from './novelAssistant';
 import { planningContext, planningRules } from './planning';
-import { resourcePaths } from './skills';
-import { isSkillReference } from './writingSkillTools';
 import { resolveCharacterRelation } from './characterRelations';
 import { researchExtractionRules } from './skillExtraction';
-import { relevantSkillResources, skillApplicationRules } from './skillResources';
+import { skillApplicationRules } from './skillResources';
+import { skillEntry } from './writingSkillTools';
 
 export function numberedText(text: string) { return text.split(/\n\s*\n|\n/).filter(s => s.trim()).map((s, index) => `[P${index + 1}] ${s}`).join('\n\n'); }
 export function sourceChunks(text: string, limit: number): string[] {
@@ -105,37 +104,7 @@ const proseRules = '写作时，作者选用的 Skill 决定文风、对白和�
 const expressionEvidenceRules = '区分常态语言与特定人物在经营、宣传或博弈中的话术，观察谁在使用、对方怎样回应，不能因为原文出现过专业词汇就要求所有旁白与对白密集使用。迁移示例先用符合新人物身份的普通措辞展示表达方法；行业词汇只在有依据的对应情境中使用，不用自造的技术、生理或统计结论支撑例子。原创示例的句法、词汇密度与原文保持相近，不为了换题材改成华丽仿古或讲解政策的长对白。用词与句法的归纳以所引原文实际措辞为准，不凭题材或某段剧情推断整部作品的语言。';
 const extractionRules = '编写可直接用于小说创作的完整 SKILL.md，包含 YAML name、description 元数据。以研究中的原文证据判断实际文风，保留可辨认的阅读乐趣、叙述态度、人物语言与情绪节拍。description 和适用情境描述小说起草、续写、改写中的阅读效果，不把原作题材、商业模式、主角身份或金手指设为使用前提；不要把所有章节限制为推广新事物或经营扩张。先给出可迁移的风格优先级和写法，再说明有依据的题材变体；具体设定和人物选择服从作者当前小说。不得从仙侠背景推断古风文言，不得把直白口语和现代名词替换为自造的玄奥术语。给出理解作者当前事件、确定表达基调、按情境选择写法、组织场景、写对白与检查成稿的执行流程；表达基调与有条件使用的情节机制分开，先服从本章人物目标和事件，再匹配适用机制，不改变本章任务以套用原作模式。关键机制说明触发条件、具体操作、阅读效果、改变人物目标与核心冲突的原创正文短示例、失败写法与修正；示例是实际动作与对白，仅替换背景、姓名或工具而重演原作同一事件不算迁移，不能写成创作方案概要。喜剧保留预期、错位、落点与反应，其他基调不强加幽默。保留台词与内心的距离、人物私心、口语程度、长短句和解释密度。不同情境的变体分别保留，只合并真正重复的写法。失败写法与修正只对该机制的触发情境生效；不能将原作的某次选择写成所有创作必须遵守的禁令，不规定主角永远不能出丑、必须赚钱、必须推广某种产品等无依据限制。通用因果清单仅简要补充，不改写成泛化教材，不靠重复清单填充篇幅，不因追求简短删除有依据的写法。原文短引文仅供判断写法，不写入入口或示例；不照搬原作专名、句子、特定情节或章节答案，不要求用户填写研究目标。仅输出完整 SKILL.md，不加代码围栏。';
 const compositionRules = '根据全部分段研究的表达证据与所引原文，整理 Skill 入口中的文风基准与表达方法。以实际措辞为准，不照抄研究中的概括；具体情节机制的完整步骤、示例、反例及证据已保存为配套资源，入口不再重复抄录整套机制，也不将其变成所有人物必须遵守的行为规则。profile 描述有原文措辞证据的叙述距离、用词、口语程度、句法、对白与情绪节拍。expression 仅说明叙述用词、句段节拍、信息呈现、对白承接、动作反应与叙述视角怎样产生阅读效果；不要将人物采取何种行动、怎样经营或最终获胜的情节步骤当成表达方法。每项提供可用于不同人物目标的实际写法、原创正文示例、使用边界和研究中已有的证据起止 P 编号；适用边界以人物处境与表达基调说明，不规定主角一律威严、赚钱、布道、推广新品、不能出丑或角色一律虚伪等。比如嘴硬与动作反差既能写议价，也能写离别；迁移示例应改变人物目标和核心冲突，可以展示不同的日常关系、合作、离别或困境，而不是给原作事件改名、换背景或换工具。原文没有的表达特色不补造，不因题材是仙侠就编造古风口吻，不把人物常用的现代词汇改成玄奥术语，也不把某个情节中的经营策略当成整部作品的表达基调。description 简明描述小说起草、续写与改写中适用的文风与阅读效果，不将原作题材或身份作为使用前提；名称使用清楚的短语，不堆砌术语。保留有差异的表达方法，合并真正重复的观察，不重复通用因果清单。原文引用仅用于判断，不写入 profile 或示例，不复制原作专名、语句和具体情节。只输出完整 JSON：{"name":"简短名称","description":"适用创作任务与阅读效果","profile":"以实际措辞为依据的文风特征","expression":[{"title":"表达方法名称","guideline":"具体使用方法","example":"改变人物目标与冲突的原创正文片段","boundary":"何时适用、何时应调整或停用","evidence":[已有研究证据的P起止编号]}]}。';
-const taskTerms: Record<Job['kind'], RegExp> = {
-  revise: /设定|人物|世界|规划|outline|plan|character/i,
-  draft: /正文|写作|write|daily|chapter|narrative|dialogue|craft/i,
-  continue: /续写|正文|连续|continu|daily|chapter|continuity/i,
-  rewrite: /改写|修改|修订|rewrite|revision|deslop|style/i,
-  review: /审稿|检查|一致性|review|check|continuity|deslop/i,
-  plan: /大纲|规划|人物|outline|plan|setup|plot|character|branch/i,
-  memory: /记忆|状态|事实|memory|state|canon|continuity/i,
-  scan: /榜单|扫榜|选题|scan|ranking|genre|market/i,
-  analyze: /拆文|结构|节奏|analy|structure|rhythm|extract/i,
-  prepare: /设定|人物|世界|规划|plan|character/i,
-  summary: /摘要|summary/i, train: /skill|训练/i, collect: /采集/i,
-  style: /风格|文风|句法|style|voice|distill|prose/i,
-};
-function excerpt(text: string, limit: number, terms: RegExp): string {
-  if (text.length <= limit) return text;
-  const marker = '\n[资料摘录]\n';
-  const blocks = text.split(/\n\s*\n/);
-  const ranked = blocks.map((block, index) => ({ block, index, score: (terms.test(block) ? 2 : 0) + (index < 2 ? 1 : 0) })).sort((a, b) => b.score - a.score || a.index - b.index);
-  const chosen: { block: string; index: number }[] = []; let remaining = Math.max(0, limit - marker.length);
-  for (const item of ranked) {
-    if (remaining < 30) break;
-    const part = item.block.slice(0, remaining - 2); chosen.push({ block: part, index: item.index }); remaining -= part.length + 2;
-  }
-  return marker + chosen.sort((a, b) => a.index - b.index).map(item => item.block).join('\n\n');
-}
-function skillResourceQuery(job: Job, step: JobStep) {
-  const manuscript = ['continue', 'rewrite', 'review'].includes(job.kind) ? step.selection || step.baseContent.slice(-6000) : '';
-  return [job.instruction, step.title, step.basePlan, manuscript].filter(Boolean).join('\n');
-}
-export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: AIConfig): { system: string; user: string; skills: NonNullable<JobStep['execution']>['skills']; toolSkills?: Skill[] } {
+export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: AIConfig): { system: string; user: string; toolSkills: Skill[] } {
   const project = state.projects.find(p => p.id === job.projectId);
   if (job.kind === 'rewrite' && !step.baseContent.trim() && !step.selection.trim()) throw new Error('本章暂无可改写的正文，请先采用生成稿或填写正文');
   const withResearch = job.steps.some(part => part.stage === 'style-research');
@@ -193,62 +162,24 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
   if (['analyze', 'style'].includes(job.kind)) system += '\n分析对象和范围已由 App 选定，按当前任务的分析维度直接完成，不要求用户填写研究要求或确认中间阶段。Skill 仅提供分析方法，忽略其中要求用户补充目标、选择流程或创建文件的步骤。结论仅适用于所选文本；证据不足的内容省略，不推测未提供的章节。';
   if (required.length + system.length + 300 > config.contextChars) throw new Error('任务材料超过上下文上限，请调整供应商的上下文上限或缩小范围');
   const chosenSkills = job.skillIds ?? project?.skillIds ?? [];
-  const skills = state.skills.filter(s => s.id !== 'builtin-revise' && (s.enabled || chosenSkills.includes(s.id)) && (s.tasks.includes(job.kind) || (job.novelChat && chosenSkills.includes(s.id))) && (!s.originReferenceId || chosenSkills.includes(s.id)));
-  // Explicit choices keep complete definitions. A tiny built-in must not take
-  // half the budget and silently erase the author's dialogue/style rules.
-  const selectedSkills = skills.filter(skill => chosenSkills.includes(skill.id));
-  const chapterWriting = !!step.chapterId && ['draft', 'continue', 'rewrite', 'plan', 'review'].includes(job.kind);
-  const toolSkills = chapterWriting ? selectedSkills.filter(skill => skill.files.some(isSkillReference)) : [];
-  const generalSkills = skills.filter(skill => !chosenSkills.includes(skill.id));
-  if (toolSkills.length || (chapterWriting && generalSkills.some(skill => skill.files.some(isSkillReference)))) system += '\n按已选 Skill 的入口规则处理当前章节。需要具体写法时，按 Skill ID 搜索并读取参考文件；搜索命中只是候选，不必通读目录。';
-  const loadedSkills: NonNullable<JobStep['execution']>['skills'] = [];
-  const contextReserve = project && !job.novelChat ? Math.min(8000, Math.floor(config.contextChars * .3)) : 300;
-  const selectedEntries = selectedSkills.map(skill => {
-    const definition = skill.files.find(file => /(^|\/)SKILL\.md$/i.test(file.path));
-    if (!definition?.content.trim()) throw new Error(`Skill「${skill.name}」缺少 SKILL.md`);
-    const links = resourcePaths(definition.content);
-    const resources = chapterWriting || skill.resourceMode === 'relevant' ? [] : skill.files.filter(file => !/SKILL\.md$/i.test(file.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(file.path) && (links.some(path => file.path === path || file.path.endsWith('/' + path)) || taskTerms[job.kind].test(file.path)));
-    return { skill, definition, resources };
+  const toolSkills = state.skills.filter(skill => {
+    const chosen = chosenSkills.includes(skill.id);
+    if (skill.id === 'builtin-revise' || (!chosen && (!skill.enabled || skill.originReferenceId)) || (!skill.tasks.includes(job.kind) && !(job.novelChat && chosen))) return false;
+    if (skillEntry(skill)?.content.trim()) return true;
+    if (chosen) throw new Error(`Skill「${skill.name}」缺少有效的 SKILL.md`);
+    return false;
   });
-  const selectedText = () => selectedEntries.map(({ skill, definition, resources }) => `\n<skill id=${JSON.stringify(skill.id)} name=${JSON.stringify(skill.name)} source="作者选用">\n${definition.content}${resources.map(file => `\n资料 ${file.path}：\n${file.content}`).join('')}\n</skill>`).join('');
-  let selectedRules = selectedText();
-  if (selectedRules && required.length + system.length + selectedRules.length + contextReserve > config.contextChars) throw new Error('所选 Skill 与任务材料超过上下文上限，请减少所选 Skill 或增大 AI 上下文');
-  const progressive = selectedEntries.filter(entry => !chapterWriting && entry.skill.resourceMode === 'relevant');
-  const query = skillResourceQuery(job, step);
-  for (const [index, entry] of progressive.entries()) {
-    const budget = Math.floor((config.contextChars - required.length - system.length - selectedRules.length - contextReserve) / (progressive.length - index));
-    entry.resources = relevantSkillResources(entry.skill.files, job.kind, query, budget);
-    if (!entry.resources.length && entry.skill.files.some(file => /^references\/(?!index\.md)/.test(file.path))) throw new Error(`所选 Skill「${entry.skill.name}」的写法资源超过上下文上限，请增大 AI 上下文`);
-    selectedRules = selectedText();
+  // Discovery is metadata only. Keep the eligible files local to the tool host;
+  // a catalog entry is not a read and must not appear in execution history.
+  if (toolSkills.length) {
+    const catalog = toolSkills.map(skill => ({
+      id: skill.id, name: skill.name.slice(0, 160), description: skill.description.replace(/\s+/g, ' ').trim().slice(0, 512),
+      source: chosenSkills.includes(skill.id) ? '作者选用' : '自动候选',
+    }));
+    system += '\n可用 Skill 目录（仅元数据）：' + JSON.stringify(catalog)
+      + '\n目录只用于发现 Skill，不代表已经读过。按实际返回的 Skill 内容执行当前任务。';
+    if (required.length + system.length + 300 > config.contextChars) throw new Error('Skill 目录与任务材料超过上下文上限，请减少启用的 Skill 或增大上下文');
   }
-  for (const { skill, definition, resources } of selectedEntries) loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, files: [definition.path, ...resources.map(file => file.path)], contents: [definition, ...resources].map(({ path, content }) => ({ path, content })) });
-  let available = Math.max(0, Math.min(Math.floor(config.contextChars * .22), config.contextChars - required.length - system.length - selectedRules.length - contextReserve));
-  for (const [index, skill] of generalSkills.entries()) {
-    if (available < 100) break;
-    const budget = Math.floor(available / (generalSkills.length - index));
-    const definition = skill.files.find(f => /(^|\/)SKILL\.md$/i.test(f.path))?.content ?? '';
-    const terms = taskTerms[job.kind], links = resourcePaths(definition);
-    const resources = chapterWriting ? [] : skill.files.filter(f => !/SKILL\.md$/i.test(f.path) && /\.(md|txt|json|ya?ml|toml|csv)$/i.test(f.path)).map(f => ({ ...f, score: (links.some(path => f.path === path || f.path.endsWith('/' + path)) ? 2 : 0) + (terms.test(f.path) ? 4 : 0) })).sort((a, b) => b.score - a.score);
-    const header = `\n<skill id=${JSON.stringify(skill.id)} name=${JSON.stringify(skill.name)}>\n`, footer = '\n</skill>';
-    const contentBudget = Math.max(0, budget - header.length - footer.length);
-    if (contentBudget < 30) continue;
-    const rules = excerpt(definition, Math.floor(contentBudget * (resources.length ? .5 : 1)), terms);
-    let remaining = contentBudget - rules.length, materials = '';
-    const entry = skill.files.find(file => /(^|\/)SKILL\.md$/i.test(file.path));
-    const contents = entry && rules ? [{ path: entry.path, content: rules }] : [];
-    for (const file of resources) {
-      const label = `\n资料 ${file.path}：\n`;
-      if (remaining < label.length + 60) break;
-      const content = excerpt(file.content, Math.min(remaining - label.length, Math.max(200, Math.floor(contentBudget * .3))), terms);
-      materials += label + content; remaining -= label.length + content.length;
-      contents.push({ path: file.path, content });
-    }
-    const section = (header + rules + materials + footer).slice(0, budget);
-    system += section; available -= section.length;
-    if (chapterWriting && skill.files.some(isSkillReference)) toolSkills.push(skill);
-    loadedSkills.push({ id: skill.id, name: skill.name, version: skill.version, automatic: true, files: contents.map(file => file.path), contents });
-  }
-  system += selectedRules;
   // Leave space for native tool schemas, result pages and conversation history,
   // without removing the author's instruction, selected passage or chapter source.
   const toolReserve = toolSkills.length ? Math.min(16000, Math.floor(config.contextChars * .25)) : 0;
@@ -262,7 +193,7 @@ export function buildPrompt(state: Workspace, job: Job, step: JobStep, config: A
   }).join('\n') : '';
   contextBudget -= priorText.length;
   const context = (project && !job.novelChat ? projectContext(project, job.kind === 'draft' ? { ...step, baseContent: '' } : step, contextBudget, !!source) : '') + priorText;
-  return { system, user: task + context + source + selected + resume, skills: loadedSkills, toolSkills };
+  return { system, user: task + context + source + selected + resume, toolSkills };
 }
 function projectContext(project: Project, step: JobStep, budget: number, hasSource: boolean) {
   const index = project.chapters.findIndex(c => c.id === step.chapterId);

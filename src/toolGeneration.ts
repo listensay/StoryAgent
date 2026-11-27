@@ -1,7 +1,10 @@
 import { PermanentAIError } from './aiRetry';
 import type { Provider } from './domain';
 
-export type WritingTools = { execute: (name: string, args: unknown, maxChars: number) => string };
+export type WritingTools = {
+  execute: (name: string, args: unknown, maxChars: number) => string;
+  pendingRequired?: () => string[];
+};
 type Protocol = Provider['protocol'];
 type Json = Record<string, any>; // Native assistant items are opaque except for the function-call envelope.
 export type ModelRequest = { url: string; body: Record<string, unknown>; headers: Record<string, string> };
@@ -9,15 +12,17 @@ type Call = { name: string; id?: string; args: unknown };
 export type ToolTurn = { assistant: Json[]; calls: Call[] };
 
 export const READY_TO_WRITE = '<ready_to_write/>';
-const preparation = `\n资料查询回合：按需使用 Skill 工具；资料足够时只回复 ${READY_TO_WRITE}，随后开始流式写作。若直接交付正文，则不要附加标记。`;
-const MAX_ROUNDS = 5, MAX_BATCH = 6, MAX_RESULT_CHARS = 6000;
+const preparation = `\nSkill 调用回合：先调用 activate_skill 读取作者选用的每个 Skill；自动候选只在适用时激活。有 nextOffset 时继续读取直到返回 null；配套资料按需搜索或读取。资料足够时只回复 ${READY_TO_WRITE}，随后开始流式生成。若直接交付结果，不要附加标记。`;
+const MAX_ROUNDS = 5, MAX_ACTIVATION_ROUNDS = 24, MAX_BATCH = 6, MAX_RESULT_CHARS = 6000;
 
 function declarations(protocol: Protocol) {
   const kind = (type: string) => protocol === 'gemini' ? type.toUpperCase() : type;
   const skill = { type: kind('string'), description: '首轮提示中的 Skill ID' };
+  const offset = { type: kind('integer'), description: '首读省略；后续使用上次返回的 nextOffset' };
   const definitions = [
-    { name: 'search_skill_files', description: '按关键词查找 Skill 的资料文件；skill 使用首轮提示中的 Skill ID。', properties: { skill, query: { type: kind('string') } }, required: ['skill', 'query'] },
-    { name: 'read_skill_file', description: '读取 Skill 文件的一页；skill 使用首轮提示中的 Skill ID。若结果含 nextOffset，可将其作为 offset 继续读取。', properties: { skill, path: { type: kind('string') }, offset: { type: kind('integer') } }, required: ['skill', 'path'] },
+    { name: 'activate_skill', description: '读取 SKILL.md，返回 nextOffset 时继续读到 null；skill 使用首轮提示中的 Skill ID。', properties: { skill, offset }, required: ['skill'] },
+    { name: 'search_skill_files', description: '在已激活的 Skill 中按关键词搜索资料；skill 使用首轮提示中的 Skill ID。', properties: { skill, query: { type: kind('string') } }, required: ['skill', 'query'] },
+    { name: 'read_skill_file', description: '读取已激活 Skill 的资料文件；skill 使用首轮提示中的 Skill ID。若结果含 nextOffset，可将其作为 offset 继续读取。', properties: { skill, path: { type: kind('string') }, offset }, required: ['skill', 'path'] },
   ].map(({ name, description, properties, required }) => ({ name, description, parameters: { type: kind('object'), properties, required } }));
   switch (protocol) {
     case 'chat': return definitions.map(fn => ({ type: 'function', function: fn }));
@@ -71,7 +76,7 @@ function resultItems(protocol: Protocol, calls: Call[], outputs: string[]): Json
 }
 
 function execute(tools: WritingTools, protocol: Protocol, call: Call, maxChars: number): string {
-  if (call.name !== 'search_skill_files' && call.name !== 'read_skill_file') return '未知的 Skill 工具';
+  if (call.name !== 'activate_skill' && call.name !== 'search_skill_files' && call.name !== 'read_skill_file') return '未知的 Skill 工具';
   let args = call.args;
   if (protocol === 'chat' || protocol === 'responses') {
     try { args = JSON.parse(String(args)); } catch { return '工具参数须为有效的 JSON 对象'; }
@@ -84,11 +89,12 @@ function execute(tools: WritingTools, protocol: Protocol, call: Call, maxChars: 
 export class ToolConversation {
   private history: Json[] = [];
   private rounds = 0;
+  private activationRounds = 0;
   private readonly inputLimit: number;
   constructor(private protocol: Protocol, private base: ModelRequest, contextChars: number) {
     this.inputLimit = contextChars - Math.min(4096, Math.floor(contextChars * .12)); // Keep room for the manuscript.
   }
-  private request(decide: boolean, history = this.history): ModelRequest {
+  private request(decide: boolean, history = this.history, activationRequired = false): ModelRequest {
     const { protocol, base } = this;
     if (!decide && !history.length) return base;
     const body: Json = { ...base.body, tools: declarations(protocol) };
@@ -100,7 +106,7 @@ export class ToolConversation {
       case 'chat': {
         const [system, ...user] = body.messages;
         body.messages = [decide ? { ...system, content: system.content + preparation } : system, ...user, ...history];
-        body.tool_choice = mode;
+        body.tool_choice = activationRequired ? { type: 'function', function: { name: 'activate_skill' } } : mode;
         if ('n' in body) body.n = 1; // A single conversation cannot replay alternatives.
         break;
       }
@@ -110,7 +116,7 @@ export class ToolConversation {
           body.instructions += preparation;
           body.include = [...new Set([...(body.include ?? []), 'reasoning.encrypted_content'])];
         }
-        body.tool_choice = mode;
+        body.tool_choice = activationRequired ? { type: 'function', name: 'activate_skill' } : mode;
         break;
       case 'anthropic':
         body.messages = [...body.messages, ...history];
@@ -124,14 +130,14 @@ export class ToolConversation {
           url = url.replace(/:streamGenerateContent\?alt=sse$/, ':generateContent');
           body.systemInstruction = { parts: [...body.systemInstruction.parts, { text: preparation }] };
         }
-        body.toolConfig = { ...body.toolConfig, functionCallingConfig: { mode: mode.toUpperCase() } };
+        body.toolConfig = { ...body.toolConfig, functionCallingConfig: activationRequired ? { mode: 'ANY', allowedFunctionNames: ['activate_skill'] } : { mode: mode.toUpperCase() } };
         break;
     }
     return { ...base, url, body };
   }
-  decisionRequest() {
-    if (this.rounds >= MAX_ROUNDS) return;
-    const request = this.request(true);
+  decisionRequest(activationRequired = false) {
+    if (activationRequired ? this.activationRounds >= MAX_ACTIVATION_ROUNDS : this.rounds >= MAX_ROUNDS) return;
+    const request = this.request(true, this.history, activationRequired);
     if (JSON.stringify(request.body).length <= this.inputLimit) return request;
   }
   finalRequest() { return this.request(false); }
@@ -147,9 +153,11 @@ export class ToolConversation {
     const cost = JSON.stringify(this.request(false, [...history, ...empty]).body).length;
     const maxChars = Math.min(MAX_RESULT_CHARS, Math.floor((this.inputLimit - cost) / (6 * calls.length)));
     if (maxChars < 128) return false;
+    const activating = Boolean(tools.pendingRequired?.().length);
     const outputs = calls.map(call => execute(tools, this.protocol, call, maxChars));
     this.history = [...history, ...resultItems(this.protocol, calls, outputs)];
-    this.rounds++;
+    if (activating) this.activationRounds++;
+    else this.rounds++;
     return true;
   }
 }

@@ -185,14 +185,23 @@ export async function generate(provider: Provider, config: AIConfig, system: str
     if (tools) {
       if (system.length + user.length > config.contextChars) throw new PermanentAIError('任务材料超过上下文上限，请调整 AI 上下文或缩小范围');
       const conversation = new ToolConversation(provider.protocol, base, config.contextChars);
-      for (let request = conversation.decisionRequest(); request; request = conversation.decisionRequest()) {
-        const decision = request;
+      const pending = () => tools.pendingRequired?.() ?? [];
+      const requireActivation = (message: string) => {
+        const names = pending();
+        if (names.length) throw new PermanentAIError(`未完成 Skill 激活（${names.join('、')}）：${message}`);
+      };
+      while (true) {
+        const decision = conversation.decisionRequest(pending().length > 0);
+        if (!decision) break;
         const reply = await withAIRetry<{ text: string } | { turn?: ToolTurn }>(provider, signal, async () => {
           const { text: raw } = await send(decision);
           signal.throwIfAborted();
           const data = JSON.parse(raw), text = outputText(data); // Includes refusal and provider error checks.
           const turn = readToolTurn(provider.protocol, data);
-          if (!turn && text.trim() !== READY_TO_WRITE) return { text: finish(newParser(), raw) };
+          if (!turn) {
+            requireActivation('模型未调用激活工具或未读完入口，请重试或更换支持工具调用的模型');
+            if (text.trim() !== READY_TO_WRITE) return { text: finish(newParser(), raw) };
+          }
           if (truncatedResponse(data)) throw new PermanentAIError('已达到输出上限，可继续生成');
           return { turn };
         });
@@ -201,6 +210,7 @@ export async function generate(provider: Provider, config: AIConfig, system: str
         progress?.();
         if (!reply.turn || !conversation.accept(reply.turn, tools)) break;
       }
+      requireActivation('工具回合或上下文不足，请增大上下文或减少选用的 Skill');
       finalRequest = conversation.finalRequest();
     }
     return withAIRetry(provider, signal, async () => {

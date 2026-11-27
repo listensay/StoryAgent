@@ -30,17 +30,18 @@ describe('writing activity persistence and completion', () => {
     job.status = 'accepted'; job.steps.forEach(step => { step.status = 'accepted'; }); expect(writingCompleted(job)).toBe(true);
   });
 
-  it('records only the skills and resources actually included for each stage', () => {
+  it('selects only task-appropriate Skill candidates and does not pre-read their files', () => {
     const state = emptyWorkspace(), project = newProject('测试小说', 'long'); state.projects.push(project);
     const config = { ...newAISelection(), ...defaultAdvanced() };
     const job = createJob(project, 'draft', config, project.chapters[0].id, '');
     const skill = state.skills.find(skill => skill.id === 'builtin-draft')!;
     skill.files.push({ path: 'references/unrelated.txt', content: '未读取资料' });
-    expect(buildPrompt(state, job, job.steps[0], config).skills).toEqual([{ id: skill.id, name: skill.name, version: skill.version, automatic: true, files: ['SKILL.md'], contents: [skill.files[0]] }]);
-    const memory = buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config);
-    expect(memory.skills.map(skill => skill.id)).not.toContain('builtin-draft');
+    const draft = buildPrompt(state, job, job.steps[0], config);
+    expect(draft.toolSkills).toContain(skill);
+    expect(draft.system + draft.user).not.toContain(skill.files[0].content);
+    expect(buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config).toolSkills).not.toContain(skill);
     state.skills.find(skill => skill.id === 'builtin-review')!.enabled = false;
-    expect(buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config).skills).toEqual([]);
+    expect(buildPrompt(state, { ...job, kind: 'memory' }, job.steps[0], config).toolSkills).toEqual([]);
   });
 
   it('preserves selected skill definitions and loaded resources after edits or removal', () => {
@@ -55,9 +56,10 @@ describe('writing activity persistence and completion', () => {
     project.skillIds = [skill.id];
     const config = { ...newAISelection(), ...defaultAdvanced() };
     const job = createJob(project, 'draft', config, project.chapters[0].id, ''); state.jobs.push(job);
-    const prompt = buildPrompt(state, job, job.steps[0], config), loaded = prompt.skills;
-    expect(loaded[0].files).toEqual(['SKILL.md']);
-    const tools = createWritingSkillTools(prompt.toolSkills!, (_id, file) => { loaded[0].files.push(file.path); loaded[0].contents!.push(file); });
+    const prompt = buildPrompt(state, job, job.steps[0], config);
+    const loaded = [{ id: skill.id, name: skill.name, version: skill.version, files: [] as string[], contents: [] as typeof skill.files }];
+    const tools = createWritingSkillTools(prompt.toolSkills, (_id, file) => { loaded[0].files.push(file.path); loaded[0].contents.push(file); });
+    tools.execute('activate_skill', { skill: skill.id }, 2000);
     tools.execute('read_skill_file', { skill: skill.id, path: 'references/scenes.md' }, 2000);
     const expected = structuredClone(skill.files.slice(0, 2));
     expect(loaded[0].contents).toEqual(expected);

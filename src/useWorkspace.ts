@@ -132,7 +132,7 @@ export function useWorkspace() {
               const selection = trainingResourceSelection(job, step);
               if (selection) trainingResources = await selectSkillResources(selection.files, selection.task, selection.query, config.contextChars, signal, selectionRequest);
             }
-            const prompt: { system: string; user: string; skills?: NonNullable<Job['steps'][number]['execution']>['skills']; toolSkills?: Skill[] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step, trainingResources) : buildPrompt(current, effectiveJob, effectiveStep, config);
+            const prompt: { system: string; user: string; toolSkills?: Skill[] } = job.creationTask ? JSON.parse(job.sourceText) as { system: string; user: string } : job.training ? trainingPrompt(job, step, trainingResources) : buildPrompt(current, effectiveJob, effectiveStep, config);
             if (prompt.system.length + prompt.user.length > config.contextChars) throw new Error('任务材料超过上下文上限，请调整 AI 上下文或缩小样本');
             let output = baseOutput, reasoning = step.reasoning ?? '';
             let previewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -152,23 +152,32 @@ export function useWorkspace() {
               const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id);
               if (part) {
                 part.status = 'running';
-                if (writing) part.execution = { summary: writingExecutionSummary(job, step), skills: prompt.skills ?? [], startedAt: now() };
+                if (writing) part.execution = { summary: writingExecutionSummary(job, step), skills: [], startedAt: now() };
               }
             });
-            const tools = prompt.toolSkills?.length ? createWritingSkillTools(prompt.toolSkills, (skillId, file) => {
-              if (signal.aborted) return;
+            const chosen = job.skillIds ?? current.projects.find(project => project.id === job.projectId)?.skillIds ?? [];
+            const eligible = prompt.toolSkills ?? [];
+            const requiredIds = eligible.filter(skill => chosen.includes(skill.id)).map(skill => skill.id);
+            const makeTools = () => eligible.length ? createWritingSkillTools(eligible, (skillId, file) => {
+              if (signal.aborted || !writing) return;
               commit(s => {
-                const entry = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id)?.execution?.skills.find(skill => skill.id === skillId);
-                if (!entry) return;
+                const log = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id)?.execution?.skills;
+                if (!log) return;
+                let entry = log.find(item => item.id === skillId);
+                if (!entry) {
+                  const skill = eligible.find(item => item.id === skillId)!;
+                  entry = { id: skill.id, name: skill.name, version: skill.version, automatic: !chosen.includes(skillId), files: [], contents: [] };
+                  log.push(entry);
+                }
                 if (!entry.files.includes(file.path)) entry.files.push(file.path);
                 const contents = entry.contents ??= [], index = contents.findIndex(item => item.path === file.path);
                 if (index < 0) contents.push(file); else contents[index] = file;
               });
-            }) : undefined;
+            }, requiredIds) : undefined;
             try {
               const request = (feedback = '') => generate(provider!, config, prompt.system, prompt.user + feedback, signal,
                 text => { output = baseOutput + text; schedulePreview(); },
-                writing ? text => { if (reasoning !== text) { reasoning = text; schedulePreview(); } } : undefined, idleTimeoutMs, tools);
+                writing ? text => { if (reasoning !== text) { reasoning = text; schedulePreview(); } } : undefined, idleTimeoutMs, makeTools());
               const result = step.stage === 'style-research' ? await generateSkillResearch(step.section, signal, request) : step.stage === 'style-compose' && job.steps.some(part => part.research) ? await generateSkillComposition(job, signal, request) : job.training && step.stage === 'train-revise' ? await generateTrainingRevision(job, signal, request) : await request();
               signal.throwIfAborted();
               output = baseOutput + result;
