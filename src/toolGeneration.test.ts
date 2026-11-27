@@ -132,7 +132,8 @@ describe('Skill 逐步加载', () => {
     expect(await generate(provider('chat'), config, prompt.system, prompt.user, signal(), vi.fn(), undefined, undefined,
       createWritingSkillTools(prompt.toolSkills, onRead, [selected.id]))).toBe('开头结尾');
     const [first, second, third, final] = bodies();
-    expect(first.tool_choice).toEqual({ type: 'function', function: { name: 'activate_skill' } });
+    expect(first.tool_choice).toBe('auto');
+    expect(first.messages[0].content).toContain('本轮先调用 activate_skill');
     expect(first.messages.map((message: Json) => message.role)).toEqual(['system', 'user']);
     expect(second.tool_choice).toBe('auto');
     for (const item of [selected, automatic]) {
@@ -146,12 +147,31 @@ describe('Skill 逐步加载', () => {
     expect(final.tool_choice).toBe('none');
   });
 
-  it('选用的 Skill 未被调用时阻止生成，不回退到全文注入', async () => {
-    vi.mocked(http).mockResolvedValueOnce(json(prose('chat', '未激活就写的正文')));
+  it.each(['chat', 'responses'] as const)('%s 自动工具选择仍阻止未激活就生成，不回退到全文注入', async protocol => {
+    vi.mocked(http).mockResolvedValueOnce(json(prose(protocol, '未激活就写的正文')));
     const onText = vi.fn(), execute = vi.fn();
-    await expect(generate(provider('chat'), config, system, user, signal(), onText, undefined, undefined,
+    await expect(generate(provider(protocol), config, system, user, signal(), onText, undefined, undefined,
       { execute, pendingRequired: () => ['作者选用的文风'] })).rejects.toThrow('未完成 Skill 激活');
+    expect(bodies()[0].tool_choice).toBe('auto');
     expect(http).toHaveBeenCalledTimes(1); expect(execute).not.toHaveBeenCalled(); expect(onText).not.toHaveBeenCalled();
+  });
+
+  it.each(['chat', 'responses'] as const)('%s 经由自动工具选择读完分页入口后交付正文', async protocol => {
+    const selected: Skill = { ...emptyWorkspace().skills[0], id: 'abc', files: [{ path: 'SKILL.md', content: '规则'.repeat(4000) }] };
+    const tools = createWritingSkillTools([selected], vi.fn(), [selected.id]);
+    const call = (offset?: number) => ({ id: `call-${offset ?? 0}`, name: 'activate_skill', args: { skill: selected.id, ...(offset === undefined ? {} : { offset }) } });
+    vi.mocked(http).mockImplementation(async request => {
+      const body = JSON.parse(request.body!), turns = history(protocol, body);
+      expect(body.tool_choice).toBe('auto');
+      const result = [...turns].reverse().find(item => item.role === 'tool' || item.type === 'function_call_output');
+      const page = result ? JSON.parse(result.content ?? result.output) : undefined;
+      return json(page?.nextOffset === null ? prose(protocol, '完整正文') : assistant(protocol, [call(page?.nextOffset)]));
+    });
+    const onText = vi.fn();
+    expect(await generate(provider(protocol), config, system, user, signal(), onText, undefined, undefined, tools)).toBe('完整正文');
+    expect(tools.pendingRequired?.()).toEqual([]);
+    expect(http).toHaveBeenCalledTimes(3);
+    expect(onText.mock.calls).toEqual([['完整正文']]);
   });
 });
 

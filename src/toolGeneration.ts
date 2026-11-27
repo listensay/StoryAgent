@@ -13,6 +13,7 @@ export type ToolTurn = { assistant: Json[]; calls: Call[] };
 
 export const READY_TO_WRITE = '<ready_to_write/>';
 const preparation = `\nSkill 调用回合：先调用 activate_skill 读取作者选用的每个 Skill；自动候选只在适用时激活。有 nextOffset 时继续读取直到返回 null；配套资料按需搜索或读取。资料足够时只回复 ${READY_TO_WRITE}，随后开始流式生成。若直接交付结果，不要附加标记。`;
+const activation = '\n作者选用的 Skill 尚未读完。本轮先调用 activate_skill，继续读取选用的入口，不得开始写作或回复完成标记。';
 const MAX_ROUNDS = 5, MAX_ACTIVATION_ROUNDS = 24, MAX_BATCH = 6, MAX_RESULT_CHARS = 6000;
 
 function declarations(protocol: Protocol) {
@@ -105,18 +106,20 @@ export class ToolConversation {
     switch (protocol) {
       case 'chat': {
         const [system, ...user] = body.messages;
-        body.messages = [decide ? { ...system, content: system.content + preparation } : system, ...user, ...history];
-        body.tool_choice = activationRequired ? { type: 'function', function: { name: 'activate_skill' } } : mode;
+        body.messages = [decide ? { ...system, content: system.content + preparation + (activationRequired ? activation : '') } : system, ...user, ...history];
+        // Some Responses-backed gateways cannot complete a forced function call.
+        // Activation is required by the prompt and verified before accepting prose.
+        body.tool_choice = mode;
         if ('n' in body) body.n = 1; // A single conversation cannot replay alternatives.
         break;
       }
       case 'responses':
         body.input = [{ role: 'user', content: body.input }, ...history];
         if (decide) {
-          body.instructions += preparation;
+          body.instructions += preparation + (activationRequired ? activation : '');
           body.include = [...new Set([...(body.include ?? []), 'reasoning.encrypted_content'])];
         }
-        body.tool_choice = activationRequired ? { type: 'function', name: 'activate_skill' } : mode;
+        body.tool_choice = mode;
         break;
       case 'anthropic':
         body.messages = [...body.messages, ...history];
