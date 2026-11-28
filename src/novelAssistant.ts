@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { newChapter, now, uid, type Chapter, type Job, type Note, type Project, type Workspace } from './domain';
 import { contentHash, parseJSON } from './jobWorkflow';
 import { resolveCharacterRelation } from './characterRelations';
-import { requireIdleChapters } from './chapterOperations';
+import { restoreDeleted } from './recycle';
+import { removeChapter, requireIdleChapters } from './chapterOperations';
 
 export const editableNoteKinds = ['character', 'relation', 'world', 'volume', 'scene', 'branch'] as const;
 const text = z.string().trim().min(1);
@@ -130,6 +131,7 @@ export function acceptNovel(state: Workspace, job: Job) {
   requireIdleChapters(state, project.id, result.removeChapterIds);
   const next = applyNovelResult(project, result);
   job.novelChat.before = JSON.stringify({ ...editableContent(project), removedChapters: project.chapters.filter(chapter => result.removeChapterIds.includes(chapter.id)) });
+  for (const id of result.removeChapterIds) removeChapter(state, project.id, id);
   Object.assign(project, next);
   job.novelChat.appliedBase = novelSnapshot(project);
 }
@@ -148,6 +150,8 @@ export function undoNovel(state: Workspace, job: Job) {
     if (!original) throw new Error('章节已变更，无法撤销此次调整');
     return { ...structuredClone(original), ...chapter, updatedAt: now() };
   });
+  for (const c of removedChapters) if (state.deletedChapters?.some(d => d.projectId === project.id && d.chapter.id === c.id)) restoreDeleted(state, project.id, c.id);
+  for (const id of addedIds) removeChapter(state, project.id, id);
   const positions = new Map(project.notes.map(note => [note.id, note.graphPosition]));
   project.notes = [...notes.map(note => ({ ...note, graphPosition: positions.get(note.id) })), ...project.notes.filter(note => !editableNoteKinds.includes(note.kind as typeof editableNoteKinds[number]))];
   project.chapters = restoredChapters;

@@ -18,8 +18,13 @@ export function clearWritingChat(jobs: Job[], chapterId: string, selectedIds: st
 export function writingSkillFiles(execution: NonNullable<JobStep['execution']>['skills'][number], skills: Skill[]) {
   if (execution.contents) return execution.contents;
   const skill = skills.find(skill => skill.id === execution.id);
-  const files = skill?.version === execution.version ? skill.files : skill?.revisions.find(revision => revision.version === execution.version)?.files;
-  return execution.files.map(path => ({ path, content: files?.find(file => file.path === path)?.content ?? '' }));
+  const editions = skill ? [skill, ...skill.revisions].filter(s => s.version === execution.version) : [];
+  // Legacy records have paths and display labels only. A reused version label
+  // is not evidence that the current contents are what the model read.
+  return execution.files.map(path => {
+    const contents = new Set(editions.map(s => s.files.find(file => file.path === path)?.content));
+    return { path, content: contents.size === 1 ? contents.values().next().value ?? '' : '' };
+  });
 }
 
 export function writingExecutionSummary(job: Job, step: JobStep) {

@@ -28,8 +28,14 @@ export function removeChapter(state: Workspace, projectId: string, id: string) {
   const project = state.projects.find(project => project.id === projectId);
   if (!project?.chapters.some(chapter => chapter.id === id)) throw new Error('章节已移除');
   requireIdleChapters(state, projectId, [id]);
-  project.chapters = project.chapters.filter(chapter => chapter.id !== id);
-  project.notes = project.notes.filter(note => note.chapterId !== id || !['fact', 'state', 'timeline', 'foreshadow', 'knowledge'].includes(note.kind));
+  const index = project.chapters.findIndex(c => c.id === id), chapter = project.chapters[index];
+  const memory = new Set(['fact', 'state', 'timeline', 'foreshadow', 'knowledge']);
+  const linked = project.notes.filter(n => n.chapterId === id);
+  const jobs = state.jobs.filter(j => j.projectId === projectId && j.steps.length && j.steps.every(step => step.chapterId === id));
+  (state.deletedChapters ??= []).unshift({ projectId, chapter, index, nextId: project.chapters[index + 1]?.id, prevId: project.chapters[index - 1]?.id, notes: linked.filter(n => memory.has(n.kind)), linkedNoteIds: linked.filter(n => !memory.has(n.kind)).map(n => n.id), jobs, deletedAt: now() });
+  state.jobs = state.jobs.filter(j => !jobs.includes(j));
+  project.chapters.splice(index, 1);
+  project.notes = project.notes.filter(note => note.chapterId !== id || !memory.has(note.kind));
   for (const note of project.notes) if (note.chapterId === id) note.chapterId = '';
   project.updatedAt = now();
 }

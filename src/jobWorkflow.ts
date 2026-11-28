@@ -1,15 +1,14 @@
 import { z } from 'zod';
 import { acceptedChapter, now, uid, type Job, type JobStep, type Project, type Workspace } from './domain';
 import { parseSkills } from './skills';
+import { archiveSkill } from './skillVersions';
 import { relationByNames, resolveCharacterRelation } from './characterRelations';
 import { composedSkillText, extractedSkillFiles, parseSkillComposition, parseSkillResearch, skillSnapshot } from './skillExtraction';
 import { researchText } from './skillExtractionData';
+import { contentHash, memoryResultSchema } from './memoryData';
+import { storeMemory } from './memory';
 
-export function contentHash(text: string) {
-  let a = 2166136261, b = 5381;
-  for (let i = 0; i < text.length; i++) { a = Math.imul(a ^ text.charCodeAt(i), 16777619); b = Math.imul(b, 33) ^ text.charCodeAt(i); }
-  return `${text.length}:${a >>> 0}:${b >>> 0}`;
-}
+export { contentHash } from './memoryData';
 export function needsMemory(state: Workspace, project: Project, chapter: Project['chapters'][number]) {
   return !!chapter.content.trim() && chapter.memoryHash !== contentHash(chapter.content) && !state.jobs.some(j => j.projectId === project.id && (
     (j.kind === 'memory' && ['queued', 'running', 'ready'].includes(j.status) && j.steps.some(p => p.chapterId === chapter.id && p.baseContent === chapter.content)) ||
@@ -17,9 +16,8 @@ export function needsMemory(state: Workspace, project: Project, chapter: Project
   ));
 }
 
-const memorySchema = z.object({ summary: z.string().default(''), notes: z.array(z.object({ kind: z.enum(['fact', 'state', 'timeline', 'foreshadow', 'knowledge']), title: z.string(), body: z.string() })) });
 export const parseJSON = (text: string) => JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''));
-export const parseMemory = (text: string) => memorySchema.parse(parseJSON(text));
+export const parseMemory = (text: string) => memoryResultSchema.parse(parseJSON(text));
 const preparationSchema = z.object({ theme: z.string(), audience: z.string(), synopsis: z.string(), outline: z.string(), notes: z.array(z.object({ kind: z.enum(['character', 'relation', 'world']), title: z.string(), body: z.string(), source: z.string().optional(), target: z.string().optional() })) });
 export const parsePreparation = (text: string) => preparationSchema.parse(parseJSON(text));
 export const preparationSnapshot = (p: Project) => JSON.stringify({ title: p.title, genre: p.genre, targetWords: p.targetWords, theme: p.theme, audience: p.audience, synopsis: p.synopsis, outline: p.outline, notes: p.notes.map(({ graphPosition: _, ...note }) => note), referenceIds: p.referenceIds, skillIds: p.skillIds });
@@ -30,7 +28,7 @@ export function openWriting(state: Workspace, projectId: string) {
   const project = state.projects.find(p => p.id === projectId);
   if (!project) return;
   state.activeProjectId = project.id;
-  return project.chapters[project.chapters.length - 1];
+  return project.chapters.find(chapter => chapter.id === project.writingChapterId) ?? project.chapters[project.chapters.length - 1];
 }
 export function prepareWriting(job: Job) {
   if (!['draft', 'continue', 'rewrite'].includes(job.kind)) return;
@@ -86,10 +84,7 @@ export function acceptWriting(state: Workspace, job: Job, step: JobStep) {
   if (plan) updated.plan = plan.output;
   if (summary) updated.summary = summary.output;
   if (memory) {
-    const result = parseMemory(memory.output);
-    project.notes = project.notes.filter(n => n.chapterId !== chapter.id || !['fact', 'state', 'timeline', 'foreshadow', 'knowledge'].includes(n.kind));
-    project.notes.push(...result.notes.map(n => ({ ...n, id: uid(), chapterId: chapter.id, status: 'confirmed' as const })));
-    updated.memoryHash = contentHash(updated.content);
+    storeMemory(project, updated, parseMemory(memory.output));
   }
   project.chapters = project.chapters.map(c => c.id === chapter.id ? updated : c);
   related.forEach(s => { s.status = 'accepted'; });
@@ -119,7 +114,7 @@ export function saveExtractedSkill(state: Workspace, job: Job, output: string) {
   if (job.skillTarget && (!existing || skillSnapshot(existing) !== job.skillTarget.snapshot)) throw new Error('Skill 已更新，请重新提取');
   const files = extractedSkillFiles(job, output);
   const parsed = parseSkills(files, job.sourceTitle)[0];
-  const skill: typeof parsed = { ...parsed, id, extractionJobId: job.id, name: existing?.name ?? `${job.sourceTitle || parsed.name} · Skill`, originReferenceId: job.sourceId, version: existing ? now() : '1.0', enabled: existing?.enabled ?? false, tasks: existing?.tasks ?? ['draft', 'continue', 'rewrite', 'plan'], revisions: existing ? [{ version: existing.version, files: existing.files, savedAt: now() }, ...existing.revisions].slice(0, 5) : [] };
+  const skill: typeof parsed = { ...parsed, id, extractionJobId: job.id, name: existing?.name ?? `${job.sourceTitle || parsed.name} · Skill`, originReferenceId: job.sourceId, version: existing ? now() : '1.0', enabled: existing?.enabled ?? false, tasks: existing?.tasks ?? ['draft', 'continue', 'rewrite', 'plan'], revisions: existing ? archiveSkill(existing) : [] };
   if (existing) state.skills[state.skills.indexOf(existing)] = skill;
   else state.skills.unshift(skill);
 }
@@ -135,10 +130,8 @@ export function finishAutomaticStep(state: Workspace, job: Job, step: JobStep) {
   if (job.kind === 'memory' && !step.intermediate) {
     const project = state.projects.find(p => p.id === job.projectId), chapter = project?.chapters.find(c => c.id === step.chapterId);
     if (!project || !chapter || chapter.content !== step.baseContent) throw new Error('正文已更新，请重新生成记忆');
-    const memory = parseMemory(step.output); chapter.summary = memory.summary;
-    chapter.memoryHash = contentHash(chapter.content);
-    project.notes = project.notes.filter(n => n.chapterId !== chapter.id || !['fact', 'state', 'timeline', 'foreshadow', 'knowledge'].includes(n.kind));
-    project.notes.push(...memory.notes.map(n => ({ ...n, id: uid(), chapterId: chapter.id, status: 'confirmed' as const })));
+    const memory = parseMemory(step.output);
+    storeMemory(project, chapter, memory); chapter.summary = memory.summary;
     project.updatedAt = now(); step.status = 'accepted';
   }
 }

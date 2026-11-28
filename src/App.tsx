@@ -8,11 +8,13 @@ import { exportNovel, parseWorkspace, type Job } from './domain';
 import { exportFile, pickFiles } from './platform';
 import { Projects } from './pages/Projects';
 import './App.css';
+import { BackupHistory } from './BackupHistory';
 import { TaskList } from './TaskList';
 import { clearFinishedTasksFromList } from './taskQueue';
 import { openWriting } from './jobWorkflow';
 import { AppUpdateButton } from './AppUpdateButton';
 
+const ManuscriptSearch = lazy(() => import('./ManuscriptSearch').then(m => ({ default: m.ManuscriptSearch })));
 const NovelAssistant = lazy(() => import('./NovelAssistantChat').then(m => ({ default: m.NovelAssistant })));
 const Writing = lazy(() => import('./pages/Writing').then(m => ({ default: m.Writing })));
 const Characters = lazy(() => import('./pages/Characters').then(m => ({ default: m.Characters })));
@@ -27,12 +29,15 @@ type Route = 'projects' | 'create' | 'write' | 'details' | 'characters' | 'world
 const names: Record<Route, string> = { projects: '我的小说', create: '新建小说', write: '写作', details: '创作准备', characters: '人物档案', world: '世界设定', outline: '故事规划', memory: '小说记忆', research: '资料研究', skills: '技能管理', training: 'Skill 训练营', settings: 'AI 与设置' };
 function App() {
   const store = useWorkspace();
+  const [backupHistory, setBackupHistory] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [route, setRoute] = useState<Route>('projects');
   const [appVersion, setAppVersion] = useState('');
   const [novelIdea, setNovelIdea] = useState('');
   const [novelGenre, setNovelGenre] = useState('');
   const [focusJob, setFocusJob] = useState<Job>();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [jump, setJump] = useState<{ id: string; range?: { start: number; end: number } }>();
   const [focusRequest, setFocusRequest] = useState(0);
   const [navOpened, setNavOpened] = useState(false);
   const [exporting, setExporting] = useState(false), [format, setFormat] = useState<'txt' | 'md'>('txt');
@@ -40,10 +45,15 @@ function App() {
   const projectRoute = ['write', 'details', 'characters', 'world', 'outline', 'memory'].includes(route);
   const navigate = (next: Route, projectId = store.stateRef.current.activeProjectId) => {
     if (next === 'write') { store.update(s => { openWriting(s, projectId); }); setFocusRequest(n => n + 1); }
-    setFocusJob(undefined); setRoute(next); setNavOpened(false);
+    setJump(undefined); setFocusJob(undefined); setRoute(next); setNavOpened(false);
   };
   const open = (id: string) => { setAssistantOpen(false); navigate('write', id); };
+  const openChapter = (id: string, range?: { start: number; end: number }) => {
+    if (!project?.chapters.some(c => c.id === id)) { store.notify('章节已移除'); return; }
+    setFocusJob(undefined); setSearchOpen(false); setJump({ id, range }); setFocusRequest(n => n + 1); setRoute('write'); setNavOpened(false);
+  };
   const openTask = (job: Job) => {
+    setJump(undefined);
     if (job.projectId && store.state.projects.some(p => p.id === job.projectId)) store.update(s => { s.activeProjectId = job.projectId; });
     if (job.novelChat) { setRoute('outline'); setAssistantOpen(true); setNavOpened(false); return; }
     const next: Route = job.creationTask && store.state.creationDraft?.id === job.creationTask.draftId ? 'create' : job.creationTask ? job.creationTask.stage === 'outline' ? 'outline' : 'details' : job.training ? 'training' : ['scan', 'analyze', 'style', 'collect'].includes(job.kind) ? 'research' : job.kind === 'prepare' ? 'details' : job.kind === 'memory' ? 'memory' : job.kind === 'plan' && !job.steps.some(s => s.chapterId) ? 'outline' : 'write';
@@ -54,7 +64,7 @@ function App() {
     if (store.message) notifications.show({ id: `workspace-message-${store.messageId}`, message: store.message, autoClose: 6000, withCloseButton: true, closeButtonProps: { icon: <X size={18} />, 'aria-label': '关闭通知' } });
   }, [store.message, store.messageId]);
   const nav = (id: Route, Icon: AppIcon) => <NavLink component="button" key={id} label={names[id]} leftSection={<Icon size={21} />} active={route === id} onClick={() => navigate(id)} aria-current={route === id ? 'page' : undefined} />;
-  if (store.loadError) return <Stack className="load-screen" align="center" justify="center"><Feather size={32} /><Title order={1}>数据加载失败</Title><Text c="red.8">{store.loadError}</Text><Button onClick={() => location.reload()}>重试</Button><Button onClick={() => void restore()}>从备份恢复</Button></Stack>;
+  if (store.loadError) return <Stack className="load-screen" align="center" justify="center"><Feather size={32} /><Title order={1}>数据加载失败</Title><Text c="red.8">{store.loadError}</Text><Button onClick={() => location.reload()}>重试</Button><Button onClick={() => setBackupHistory(true)}>从自动备份恢复</Button><Button onClick={() => void restore()}>从备份文件恢复</Button><ModalPresence>{backupHistory && <BackupHistory store={store} onClose={() => setBackupHistory(false)} />}</ModalPresence></Stack>;
   if (!store.loaded) return <Stack className="load-screen" align="center" justify="center"><Loader color="story" /><Text>加载中…</Text></Stack>;
   return <AppShell navbar={{ width: 220, breakpoint: 'sm', collapsed: { mobile: !navOpened } }} padding={0}>
     <AppShell.Navbar p="sm">
@@ -78,6 +88,7 @@ function App() {
     <AppShell.Main className="main-shell">
       <Group component="header" justify="flex-end" wrap="nowrap" className="app-header">
         <Box hiddenFrom="sm" mr="auto"><IconButton icon={List} label="打开导航" onClick={() => setNavOpened(true)} /></Box>
+        {projectRoute && project && <Button onClick={() => setSearchOpen(true)}>全书搜索</Button>}
         {projectRoute && project && <Button primary icon={Sparkles} onClick={() => setAssistantOpen(true)}>小说 AI</Button>}
         {projectRoute && project && <Button icon={Download} onClick={() => setExporting(true)}>导出</Button>}
         <AppUpdateButton store={store} onVersion={setAppVersion} />
@@ -86,8 +97,8 @@ function App() {
         {route === 'projects' && <Projects store={store} onOpen={open} onCreate={() => navigate('create')} />}
         {route === 'create' && <NovelCreation store={store} genre={novelGenre} onGenreChange={setNovelGenre} idea={novelIdea} onIdeaChange={setNovelIdea} onBack={() => navigate('projects')} onOpen={id => { setNovelIdea(''); setNovelGenre(''); open(id); }} onSettings={() => navigate('settings')} />}
         {projectRoute && !project && <Projects store={store} onOpen={open} onCreate={() => navigate('create')} />}
-        {route === 'write' && project && <Writing key={project.id + focusRequest} focusJobId={focusJob?.id} project={project} store={store} focusChapterId={focusJob?.steps.find(s => s.chapterId)?.chapterId} onSettings={() => navigate('settings')} />}
-        {['details', 'world', 'outline', 'memory'].includes(route) && project && <Knowledge key={project.id + route + focusRequest} focusJobId={focusJob?.id} project={project} store={store} mode={route as 'details' | 'world' | 'outline' | 'memory'} onSettings={() => navigate('settings')} />}
+        {route === 'write' && project && <Writing key={project.id + focusRequest} focusJobId={focusJob?.id} project={project} store={store} focusRange={jump?.range} focusChapterId={jump?.id ?? focusJob?.steps.find(s => s.chapterId)?.chapterId} onSettings={() => navigate('settings')} />}
+        {['details', 'world', 'outline', 'memory'].includes(route) && project && <Knowledge onOpenChapter={openChapter} key={project.id + route + focusRequest} focusJobId={focusJob?.id} project={project} store={store} mode={route as 'details' | 'world' | 'outline' | 'memory'} onSettings={() => navigate('settings')} />}
         {route === 'characters' && project && <Characters key={project.id} project={project} store={store} />}
         {route === 'research' && <Research key={focusRequest} store={store} onSettings={() => navigate('settings')} focusJobId={focusJob?.id} />}
         {route === 'skills' && <Skills store={store} />}
@@ -95,6 +106,7 @@ function App() {
         {route === 'settings' && <Settings store={store} />}
       </Suspense></Box>
     </AppShell.Main>
+    <Suspense fallback={null}><ModalPresence>{searchOpen && project && <ManuscriptSearch project={project} store={store} onClose={() => setSearchOpen(false)} onOpenChapter={openChapter} />}</ModalPresence></Suspense>
     {project && <Suspense fallback={null}><NovelAssistant key={project.id} project={project} store={store} opened={assistantOpen} onClose={() => setAssistantOpen(false)} onSettings={() => { setAssistantOpen(false); navigate('settings'); }} /></Suspense>}
     <ModalPresence>{exporting && project && <Modal title="导出小说" onClose={() => setExporting(false)} footer={<><Button onClick={() => setExporting(false)}>取消</Button><Button primary onClick={() => void exportFile(project.title.replace(/[\/:*?"<>|]/g, '_') + '.' + format, exportNovel(project, format)).then(saved => { if (saved) { store.notify('已导出'); setExporting(false); } }).catch(e => store.notify(String(e)))}>导出</Button></>}><Select label="文件格式" value={format} onChange={v => setFormat(v as 'txt' | 'md')} options={[{ value: 'txt', label: 'TXT' }, { value: 'md', label: 'Markdown' }]} /></Modal>}</ModalPresence>
   </AppShell>;

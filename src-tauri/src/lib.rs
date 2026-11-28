@@ -1,10 +1,13 @@
 mod articles;
+mod backups;
 mod network;
 mod proxy;
 mod research;
 mod rankings;
 mod storage;
 mod updates;
+#[cfg(desktop)]
+mod window_layout;
 use tauri::Manager;
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -17,11 +20,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                let window = app.get_webview_window("main").ok_or("主窗口未创建")?;
+                window_layout::prepare(&window)?;
+            }
+            Ok(())
+        })
         .manage(network::Requests::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             storage::load_workspace,
             storage::save_workspace,
+            backups::list_workspace_backups,
+            backups::read_workspace_backup,
             storage::save_credential,
             storage::credential_exists,
             storage::pick_files,

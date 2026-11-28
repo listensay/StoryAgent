@@ -1,5 +1,5 @@
 import { Box, Menu, NavLink, ScrollArea, Stack, Text } from '@mantine/core';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { type Chapter, wordCount } from './domain';
 import { chapterDropIndex, type ChapterDropPosition } from './chapterOperations';
 import { EmptyState } from './components';
@@ -48,7 +48,7 @@ export function ChapterList({ chapters, selectedId, busyIds, onSelect, onMove, o
     frame = requestAnimationFrame(scroll);
     return () => cancelAnimationFrame(frame);
   }, [dragging, updateDrop]);
-  const dragMove = (event: PointerEvent<HTMLButtonElement>) => {
+  const dragMove = (event: PointerEvent) => {
     const drag = pointer.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     drag.x = event.clientX; drag.y = event.clientY;
@@ -57,15 +57,30 @@ export function ChapterList({ chapters, selectedId, busyIds, onSelect, onMove, o
     event.preventDefault();
     updateDrop(drag.x, drag.y);
   };
-  const dragEnd = (event: PointerEvent<HTMLButtonElement>) => {
+  const dragEnd = (event: PointerEvent) => {
     const drag = pointer.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (drag.active) { event.preventDefault(); updateDrop(event.clientX, event.clientY); }
+    if (!drag.active) { pointer.current = undefined; return; }
+    // Returning to the press position cancels a drag and keeps the click usable.
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) { drag.active = false; clearDrag(); return; }
+    event.preventDefault(); updateDrop(event.clientX, event.clientY);
     const target = dropTarget.current;
-    const destination = drag.active && target ? chapterDropIndex(chapters, drag.id, target.id, target.position) : undefined;
+    const destination = target ? chapterDropIndex(chapters, drag.id, target.id, target.position) : undefined;
     clearDrag();
     if (destination !== undefined) onMove(drag.id, destination);
   };
+  useEffect(() => {
+    window.addEventListener('pointermove', dragMove);
+    window.addEventListener('pointerup', dragEnd);
+    window.addEventListener('pointercancel', clearDrag);
+    window.addEventListener('blur', clearDrag);
+    return () => {
+      window.removeEventListener('pointermove', dragMove);
+      window.removeEventListener('pointerup', dragEnd);
+      window.removeEventListener('pointercancel', clearDrag);
+      window.removeEventListener('blur', clearDrag);
+    };
+  });
   const openKeyboardMenu = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key === 'Escape' && pointer.current?.active) { event.preventDefault(); clearDrag(); return; }
     if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
@@ -77,9 +92,8 @@ export function ChapterList({ chapters, selectedId, busyIds, onSelect, onMove, o
   return <ScrollArea className="chapter-items" type="auto" viewportRef={viewport} viewportProps={{ role: 'region', 'aria-label': '章节列表' }}><Stack gap={6}>{chapters.map((chapter, index) => <Box key={chapter.id} className="chapter-list-item" data-chapter-id={chapter.id} data-dragging={dragging === chapter.id || undefined} data-drop-position={drop?.id === chapter.id ? drop.position : undefined}>
     <Menu width={180} opened={contextId === chapter.id} onChange={opened => setContextId(opened ? chapter.id : undefined)} withinPortal>
       <Menu.ContextMenu><NavLink component="button" active={selectedId === chapter.id} aria-current={selectedId === chapter.id ? 'true' : undefined} aria-haspopup="menu" aria-expanded={contextId === chapter.id}
-        onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } setContextId(undefined); onSelect(chapter.id); }} onKeyDown={openKeyboardMenu}
-        onPointerDown={event => { if (event.button !== 0 || !event.isPrimary) return; suppressClick.current = false; pointer.current = { id: chapter.id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false }; event.currentTarget.setPointerCapture(event.pointerId); }}
-        onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={clearDrag} onLostPointerCapture={clearDrag}
+        onClick={event => { if (suppressClick.current && event.detail > 0) { suppressClick.current = false; return; } suppressClick.current = false; setContextId(undefined); onSelect(chapter.id); }} onKeyDown={openKeyboardMenu}
+        onPointerDown={event => { if (event.button !== 0 || !event.isPrimary) return; suppressClick.current = false; pointer.current = { id: chapter.id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false }; }}
         px="md" py="sm" leftSection={<Text size="sm" c="dimmed" w={24}>{String(index + 1).padStart(2, '0')}</Text>} label={chapter.title} description={`${wordCount(chapter.content).toLocaleString()} 字`} styles={{ label: { whiteSpace: 'normal', lineHeight: 1.6, overflowWrap: 'anywhere' }, description: { marginTop: 4, fontSize: 12 }, section: { alignSelf: 'flex-start', marginTop: 2 } }} /></Menu.ContextMenu>
       <Menu.Dropdown aria-label={`${chapter.title}操作`}>
         <Menu.Item leftSection={<ArrowUp size={18} />} disabled={index === 0} onClick={() => onMove(chapter.id, index - 1)}>上移</Menu.Item>

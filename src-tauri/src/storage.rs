@@ -30,12 +30,23 @@ pub fn load_workspace(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn save_workspace(app: AppHandle, data: String) -> Result<(), String> {
+pub async fn save_workspace(app: AppHandle, data: String, checkpoint: Option<bool>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || persist_workspace(app, data, checkpoint.unwrap_or(false))).await.map_err(|e| e.to_string())?
+}
+
+fn persist_workspace(app: AppHandle, data: String, checkpoint: bool) -> Result<(), String> {
     let value = serde_json::from_str::<serde_json::Value>(&data).map_err(|_| "项目数据无效".to_string())?;
     let proxy = crate::proxy::ProxySettings::from_workspace(&value)?;
     connection(&app)?.execute("INSERT INTO workspace(id,data) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET data=excluded.data", params![data]).map_err(|e| e.to_string())?;
     crate::proxy::apply_settings(proxy);
-    Ok(())
+    // Don't spend the first hourly snapshot on the pristine launch screen.
+    let has_data = ["projects", "deletedProjects", "deletedChapters", "jobs", "providers", "imageProviders", "references"]
+        .iter().any(|key| value.get(*key).and_then(|v| v.as_array()).is_some_and(|items| !items.is_empty()))
+        || value.get("creationDraft").is_some_and(|v| !v.is_null())
+        || value.get("skills").and_then(|v| v.as_array()).is_some_and(|skills| skills.iter().any(|s| s.get("builtin").and_then(|v| v.as_bool()) == Some(false)));
+    if !has_data && !checkpoint { return Ok(()); }
+    // Save the working copy even if the backup volume is full; report backup failures separately.
+    crate::backups::snapshot(&app, &data, checkpoint).map_err(|e| format!("工作区已写入，备份失败：{e}"))
 }
 
 const CREDENTIAL_SERVICE: &str = "com.od23.storyagent";

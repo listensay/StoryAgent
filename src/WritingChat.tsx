@@ -45,7 +45,7 @@ function WritingConversation({ job, project, store, onResult }: { job: Job; proj
       {steps.map(step => <StepActivity key={step.id} job={job} step={step} store={store} />)}
       {generating && <Group gap="sm" px="xs" role="status"><Loader size={16} /><Text size="sm" c="dimmed">{steps.length ? '创作任务进行中' : job.status === 'queued' ? '任务排队中' : '正在读取任务资料'}</Text></Group>}
     </Stack>
-    {completed && <Stack gap="xs" px="xs" role="status"><Group gap="sm"><Check size={19} color="var(--mantine-color-teal-7)" /><Text size="sm" fw={500}>创作任务已完成</Text></Group><Group gap="md" pl={27}>{hasResult && <Anchor component="button" size="sm" onClick={() => onResult(job.id)}>查看生成稿</Anchor>}</Group></Stack>}
+    {completed && <Stack gap="xs" px="xs" role="status"><Group gap="sm"><Check size={19} color="var(--mantine-color-teal-7)" /><Text size="sm" fw={500}>创作任务已完成</Text></Group><Group gap="md" pl={27}>{hasResult && <Anchor component="button" size="sm" onClick={() => onResult(job.id)}>{job.kind === 'review' ? '处理审稿问题' : '查看生成稿'}</Anchor>}</Group></Stack>}
     {['paused', 'failed'].includes(job.status) && <Text size="sm" c={job.status === 'failed' ? 'red.8' : 'dimmed'} role="status">{job.status === 'failed' ? '创作任务失败' : '创作任务已停止'}</Text>}
     {job.error && <Text size="sm" c="red.8" role="alert">{job.error}</Text>}
     <Group justify="flex-end" gap="xs" px="lg" py="sm" className="writing-chat-controls">

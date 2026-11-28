@@ -9,6 +9,12 @@ import { WritingChat } from './WritingChat';
 import { clearWritingChat } from './writingActivity';
 import { type Store } from './useWorkspace';
 
+const viewport = vi.hoisted(() => ({ desktop: true }));
+vi.mock('@mantine/hooks', async importOriginal => ({
+  ...await importOriginal<typeof import('@mantine/hooks')>(),
+  useMediaQuery: (query: string) => query === '(min-width: 1050px)' && viewport.desktop,
+}));
+
 function setup() {
   const state = emptyWorkspace(), project = newProject('测试小说', 'long');
   project.chapters.push(newChapter('第二章')); state.projects.push(project);
@@ -156,14 +162,37 @@ describe('writing chat entry and results', () => {
     expect(html).not.toContain('第一章');
   });
 
-  it('opens the most recent task conversation even when it belongs to an earlier chapter', () => {
+  it('keeps the manuscript beside the most recent conversation on desktop', () => {
     const { project, store } = setup();
     const html = renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} onSettings={vi.fn()} /></MantineProvider>);
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('aria-label="创作任务聊天记录"');
     expect(html).toContain('最近一次创作要求');
-    expect(html).not.toContain('aria-label="章节正文"');
+    expect(html).toContain('aria-label="章节正文"');
     expect(html).not.toContain('暂无创作任务');
+  });
+
+  it('restores the last edited chapter before choosing a recent conversation', () => {
+    const { project, store } = setup();
+    project.writingChapterId = project.chapters[1].id;
+    project.chapters[1].content = '上次正在编辑的正文';
+    const html = renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} onSettings={vi.fn()} /></MantineProvider>);
+    expect(html).toContain('上次正在编辑的正文');
+    expect(html).toContain('暂无创作任务');
+    expect(html).not.toContain('最近一次创作要求');
+  });
+
+  it('keeps the manuscript visible and collapses tools on compact windows', () => {
+    const { project, job, store } = setup();
+    viewport.desktop = false;
+    try {
+      const render = (focusJobId?: string) => renderToStaticMarkup(<MantineProvider><Writing project={project} store={store} focusJobId={focusJobId} onSettings={vi.fn()} /></MantineProvider>);
+      const html = render();
+      expect(html).toContain('aria-label="章节正文"');
+      expect(html).not.toContain('aria-label="创作任务聊天记录"');
+      expect(render(job.id)).toContain('aria-label="创作任务聊天记录"');
+      expect(render(job.id)).toContain('aria-label="章节正文"');
+    } finally { viewport.desktop = true; }
   });
 
   it('offers the current chapter result after all its outputs finish', () => {

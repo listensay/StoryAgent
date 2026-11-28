@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "StoryAgent",
-        "width": 1280,
-        "height": 840,
-        "minWidth": 760,
-        "minHeight": 600
+        "label": "main",
+        "visible": false,
+        "resizable": false,
+        "fullscreen": false
       }
     ],
     "security": {

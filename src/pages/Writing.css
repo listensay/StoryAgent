@@ -1,0 +1,55 @@
+.writing-desk {
+  --directory-width: clamp(184px, 13vw, 232px);
+  --tools-width: clamp(340px, 27vw, 490px);
+  --desk-line: var(--mantine-color-gray-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  background: var(--mantine-color-white);
+}
+.writing-desk[data-directory] { grid-template-columns: var(--directory-width) minmax(0, 1fr); }
+.writing-desk[data-tools] { grid-template-columns: minmax(0, 1fr) var(--tools-width); }
+.writing-desk[data-directory][data-tools] { grid-template-columns: var(--directory-width) minmax(0, 1fr) var(--tools-width); }
+.writing-desk .chapter-list { min-width: 0; }
+.manuscript { overflow: hidden; }
+.manuscript .chapter-title-row, .manuscript-editor { width: min(100%, 52rem); align-self: center; }
+.manuscript .chapter-title-row { flex-wrap: nowrap; }
+.manuscript-editor, .outline-editor { flex: 1; min-height: 0; }
+.manuscript-editor .mantine-Textarea-wrapper, .outline-editor .mantine-Textarea-wrapper { height: 100%; }
+.manuscript-editor .mantine-Textarea-input, .outline-editor .mantine-Textarea-input {
+  height: 100%; min-height: 0; resize: none; padding: 16px 28px 28px; font-size: 16px; line-height: 2; overscroll-behavior: contain;
+}
+.writing-tools {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
+  border-inline-start: 1px solid var(--desk-line); background: var(--mantine-color-white);
+}
+.tools-heading { flex: 0 0 auto; padding: 10px 8px; border-bottom: 1px solid var(--desk-line); }
+.tools-heading .mantine-Tabs-list { gap: 2px; justify-content: space-between; }
+.tools-heading .mantine-Tabs-tab { flex: 1; padding-inline: 8px; }
+.writing-tools .writing-chat-content, .writing-tools .writing-result-content { padding: 16px; }
+.writing-tools .writing-chat-composer { overflow-y: auto; max-height: 51%; }
+.writing-tools .composer-models .mantine-Select-root:last-child { flex: 1; min-width: 132px; }
+.writing-tools .result-picker { margin: 10px 16px 0; }
+.writing-tools .version-list { padding: 16px; }
+.writing-tools .chapter-materials { flex: 1; min-height: 0; }
+.writing-tools .outline-editor .mantine-Textarea-input { padding-inline: 16px; }
+.passage-change { padding: var(--mantine-spacing-md); border: 1px solid var(--mantine-color-gray-3); border-radius: var(--mantine-radius-md); }
+.passage-change[data-chosen] { border-color: var(--mantine-color-story-5); }
+.passage-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: var(--mantine-spacing-lg); padding-top: var(--mantine-spacing-sm); }
+@media (max-width: 1049px) {
+  .writing-desk[data-tools] {
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(248px, 1fr) minmax(286px, .95fr);
+    min-height: 534px;
+  }
+  .writing-tools { border-inline-start: 0; border-top: 1px solid var(--desk-line); }
+  .tools-heading { padding: 4px 12px; }
+  .writing-tools .writing-chat-composer { max-height: 46%; }
+  .writing-tools .writing-chat-scroll, .writing-tools .writing-result-scroll { min-height: 50px; }
+  .writing-desk[data-tools] .chapter-title-row { padding-block: 8px 0; }
+}
+@media (max-width: 680px) {
+  .manuscript-editor .mantine-Textarea-input { padding-inline: 18px; }
+  .manuscript .editor-toolbar { min-height: 48px; padding-block: 4px; }
+}

@@ -1,5 +1,6 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import { parse } from 'yaml';
+import { archiveSkill } from './skillVersions';
 import { type InputFile, http } from './platform';
 import { type Skill, type TaskKind, uid, now } from './domain';
 
@@ -71,7 +72,7 @@ export function mergeSkills(current: Skill[], incoming: Skill[]): Skill[] {
   for (const skill of incoming) {
     const index = result.findIndex(s => !s.builtin && s.name === skill.name && s.source === skill.source);
     if (index === -1) result.push(skill);
-    else { const old = result[index]; result[index] = { ...skill, id: old.id, enabled: old.enabled, tasks: old.tasks, revisions: [{ version: old.version, files: old.files, savedAt: now() }, ...old.revisions].slice(0, 5) }; }
+    else { const old = result[index]; result[index] = { ...skill, id: old.id, enabled: old.enabled, tasks: old.tasks, revisions: archiveSkill(old) }; }
   }
   return result;
 }

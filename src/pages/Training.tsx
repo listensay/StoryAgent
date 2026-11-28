@@ -1,3 +1,4 @@
+import { skillSourceLabel } from '../manualSkill';
 import { useEffect, useState } from 'react';
 import { Accordion, Badge, Group, Loader, NavLink, SimpleGrid, Stack, Text } from '@mantine/core';
 import { Button, Diff, EmptyState, Modal, ModalPresence, NumberInput, Paper, Select, Textarea, Title } from '../components';
@@ -23,7 +24,7 @@ export function Training({ store, onSettings, focusJobId }: { store: Store; onSe
   </> : !skills.length ? <EmptyState>暂无可训练的 Skill</EmptyState> : <Paper p={0} style={{ overflow: 'hidden' }}><Stack gap={0}>
     {skills.map(item => <NavLink key={item.id} component="button" aria-label={`训练 ${item.name}`} onClick={() => setSkillId(item.id)} px="lg" py="md" rightSection={<ChevronRight size={20} />}
       label={<Text size="md" fw={600} style={{ overflowWrap: 'anywhere' }}>{item.name}</Text>}
-      description={<Stack gap="sm" mt={4}><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{item.description}</Text><Group gap="sm"><Text size="xs" c="dimmed">{item.originReferenceId ? '小说提炼' : item.source.startsWith('https://github.com/') ? 'GitHub' : '文件导入'} · {item.version}</Text>{item.tasks.map(task => <Badge key={task}>{taskNames[task]}</Badge>)}</Group></Stack>} />)}
+      description={<Stack gap="sm" mt={4}><Text size="sm" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{item.description}</Text><Group gap="sm"><Text size="xs" c="dimmed">{skillSourceLabel(item)} · {item.version}</Text>{item.tasks.map(task => <Badge key={task}>{taskNames[task]}</Badge>)}</Group></Stack>} />)}
   </Stack></Paper>}</Stack></div>;
 }
 function SkillTraining({ skill, store, onSettings, focusJobId }: { skill: Skill; store: Store; onSettings: () => void; focusJobId?: string }) {

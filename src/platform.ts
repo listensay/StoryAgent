@@ -28,11 +28,13 @@ export async function refreshCredentials(state: Workspace) {
   }));
 }
 let saveQueue = Promise.resolve();
-export function saveWorkspace(state: Workspace): Promise<void> {
+export function saveWorkspace(state: Workspace, checkpoint = false): Promise<void> {
   const raw = JSON.stringify(state);
-  saveQueue = saveQueue.catch(() => {}).then(() => invoke<void>('save_workspace', { data: raw }));
+  saveQueue = saveQueue.catch(() => {}).then(() => invoke<void>('save_workspace', checkpoint ? { data: raw, checkpoint: true } : { data: raw }));
   return saveQueue;
 }
+export const listWorkspaceBackups = () => invoke<number[]>('list_workspace_backups');
+export async function readWorkspaceBackup(id: number) { return parseWorkspace(await invoke<string>('read_workspace_backup', { id })); }
 export async function saveCredential(id: string, key: string) {
   await invoke('save_credential', { id, secret: key });
 }

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { now, uid, wordCount, trainingAnnotationSchema, trainingScoreSchema, trainingSchema, type Job, type JobStep, type Skill, type Workspace, type TrainingScore } from './domain';
 import { parseJSON } from './jobWorkflow';
 import { parseSkills, resourcePaths } from './skills';
+import { archiveSkill } from './skillVersions';
 import { composedSkillText, markRelevantResources } from './skillExtraction';
 import { skillRevisionSchema } from './skillExtractionData';
 import { fitSkillResources, relevantSkillResources, skillApplicationRules } from './skillResources';
@@ -265,7 +266,7 @@ export function adoptTrainingSkill(state: Workspace, job: Job) {
   const files = [{ path: 'SKILL.md', content: parseTrainingRevision(job, training.bestSkill) }, ...structuredClone(training.resourceFiles ?? [])];
   parseSkills(files, '训练');
   if (JSON.stringify(skill.files) === JSON.stringify(files)) return;
-  skill.revisions = [{ version: skill.version, files: structuredClone(skill.files), savedAt: now() }, ...skill.revisions].slice(0, 5);
+  skill.revisions = archiveSkill(skill);
   skill.version = `训练 ${new Date().toLocaleDateString('zh-CN')}${training.bestScore >= 0 ? ` · ${training.bestScore.toFixed(1)}` : ''}`;
   skill.files = files;
   if (training.resourceFiles) skill.resourceMode = 'relevant';

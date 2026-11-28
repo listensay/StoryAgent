@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Job, type Note, type Skill, type TaskKind, type TrainingAnnotation, type TrainingScore, type Workspace } from './domain';
+import { createJob, emptyWorkspace, normalizeAISelection, now, resolveAI, taskNames, uid, validateAI, type AISelection, type Chapter, type Job, type Note, type Skill, type TaskKind, type TrainingAnnotation, type TrainingScore, type Workspace } from './domain';
 import { normalizeImageSelection } from './coverData';
 import { hasActiveRequests, loadWorkspace, refreshCredentials, saveWorkspace } from './platform';
 import { generate } from './ai';
@@ -8,6 +8,10 @@ import { buildPrompt, prepareAnalysis, prepareSkillExtraction, synthesisSteps } 
 import { generateSkillComposition, generateSkillResearch, skillSnapshot } from './skillExtraction';
 import { selectSkillResources } from './skillResources';
 import { createWritingSkillTools } from './writingSkillTools';
+import { readReview, reviewReport, type ReviewIssue } from './reviewData';
+import { archiveLegacyNotes, memoryContext } from './memory';
+import { captureJobPins } from './skillVersions';
+import { revisionRulePrompt, type RevisionDifference } from './revisionFeedback';
 import { publishJobOutput } from './jobOutput';
 import { writingExecutionSummary } from './writingActivity';
 import { acceptPreparation, acceptWriting, contentHash, finishAutomaticStep, needsMemory, parseMemory, parsePreparation, preparationSnapshot, prepareWriting, requirePreparation, requireIdleWriting, writingStep } from './jobWorkflow';
@@ -47,12 +51,25 @@ export function useWorkspace() {
     for (const job of next.jobs) if (job.hiddenFromTaskList && !isFinishedTask(job)) delete job.hiddenFromTaskList;
     for (const project of next.projects) {
       const previous = stateRef.current.projects.find(p => p.id === project.id);
-      for (const chapter of project.chapters) if (previous?.chapters.find(c => c.id === chapter.id)?.content !== chapter.content && chapter.memoryHash !== contentHash(chapter.content)) {
+      if (project.skillPins?.some(pin => !project.skillIds.includes(pin.id))) project.skillPins = project.skillPins.filter(pin => project.skillIds.includes(pin.id));
+      const oldChapters = new Map(previous?.chapters.map(c => [c.id, c.content]));
+      for (const chapter of project.chapters) if (oldChapters.has(chapter.id) && oldChapters.get(chapter.id) !== chapter.content && chapter.memoryHash !== contentHash(chapter.content)) {
+        archiveLegacyNotes(project, chapter.id, oldChapters.get(chapter.id)!);
         chapter.summary = ''; chapter.memoryHash = undefined;
         project.notes = project.notes.filter(n => n.chapterId !== chapter.id || !['fact', 'state', 'timeline', 'foreshadow', 'knowledge'].includes(n.kind));
       }
     }
     next.aiSelection = normalizeAISelection(next.aiSelection, next.providers); next.imageSelection = normalizeImageSelection(next.imageSelection, next.imageProviders); next.updatedAt = now(); stateRef.current = next; setState(next); setSaveStatus('保存中');
+  }, []);
+  // Scrolling a long manuscript must not deep-clone covers, task history or the recycle bin.
+  const rememberPosition = useCallback((projectId: string, chapterId: string, position: NonNullable<Chapter['editorPosition']>) => {
+    const current = stateRef.current, project = current.projects.find(p => p.id === projectId), chapter = project?.chapters.find(c => c.id === chapterId);
+    if (!project || !chapter) return;
+    const old = chapter.editorPosition;
+    if (old && old.start === position.start && old.end === position.end && old.scrollTop === position.scrollTop) return;
+    const chapters = project.chapters.map(c => c === chapter ? { ...c, editorPosition: position } : c);
+    const next = { ...current, projects: current.projects.map(p => p === project ? { ...p, chapters } : p) };
+    stateRef.current = next; setState(next);
   }, []);
   const setAISelection = useCallback((selection: AISelection) => update(s => { s.aiSelection = { ...selection }; }), [update]);
   useEffect(() => {
@@ -121,7 +138,7 @@ export function useWorkspace() {
           }
           await requests.run(config.providerId, signal, async () => {
             const effectiveKind = (step.stage && ['plan', 'draft', 'continue', 'rewrite', 'summary', 'memory'].includes(step.stage) ? step.stage : job.kind) as TaskKind;
-            const baseOutput = job.creationTask || job.planningChat || job.novelChat || ['memory', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
+            const baseOutput = job.creationTask || job.planningChat || job.novelChat || ['memory', 'review', 'prepare', 'train', 'style'].includes(effectiveKind) ? '' : step.output;
             const effectiveJob = { ...job, kind: effectiveKind }, effectiveStep = { ...writingStep(job, step), output: baseOutput };
             commit(s => { const part = s.jobs.find(j => j.id === id)?.steps.find(p => p.id === step.id); if (part) part.status = 'running'; });
             const writing = !job.creationTask && ['draft', 'continue', 'rewrite', 'review', 'plan'].includes(job.kind) && !!step.chapterId;
@@ -187,11 +204,13 @@ export function useWorkspace() {
               const planningResult = job.planningChat ? parsePlanningResult(output) : undefined;
               if (effectiveKind === 'memory') parseMemory(output);
               if (effectiveKind === 'prepare' && !step.intermediate) parsePreparation(output);
+              const findings = effectiveKind === 'review' ? readReview(output, step.baseContent) : undefined;
               const creationOptions = job.creationTask ? parseCreationOptions(output, job.creationTask.stage) : undefined;
               commit(s => {
                 const item = s.jobs.find(j => j.id === id), part = item?.steps.find(p => p.id === step.id);
                 if (item && part) {
-                  part.output = output; part.status = 'ready';
+                  part.output = findings ? reviewReport(findings) : output; part.status = 'ready';
+                  if (findings && !part.intermediate) part.reviewIssues = findings;
                   if (writing) { part.reasoning = reasoning; if (part.execution) part.execution.finishedAt = now(); }
                   if (creationOptions) finishCreationRound(s, item, creationOptions);
                   else if (novelResult && !hasNovelChanges(novelResult)) part.status = 'accepted';
@@ -244,7 +263,7 @@ export function useWorkspace() {
       job.planningChat = { base: planningSnapshot(project), previousJobIds: current.jobs.filter(value => value.projectId === project.id && value.planningChat && ['ready', 'accepted'].includes(value.status)).reverse().map(value => value.id) };
       buildPrompt(current, job, job.steps[0], config);
     }
-    job.skillIds = [...(project?.skillIds ?? [])];
+    captureJobPins(job, project);
     if (job.kind === 'revise' && project) {
       if (chapterId) throw new Error('小说 AI 按整本小说调整');
       if (current.jobs.some(value => value.projectId === project.id && value.novelChat && ['queued', 'running'].includes(value.status))) throw new Error('请等待回复完成');
@@ -277,6 +296,22 @@ export function useWorkspace() {
     job.status = 'queued';
     update(s => { s.jobs.unshift(job); }); notify('任务已添加'); return job.id;
   }, [notify, update]);
+  // A suggestion is transient: it shares provider slots and cancellation, but
+  // does not enqueue training, write a Skill, or persist manuscript excerpts.
+  const suggestRevisionRules = useCallback(async (diffs: RevisionDifference[], controller: AbortController) => {
+    if (restarting.current) throw new Error('正在更新软件');
+    const current = stateRef.current, config = resolveAI(current.aiSelection, current.providers);
+    const provider = current.providers.find(p => p.id === config.providerId)!;
+    const { system, user } = revisionRulePrompt(diffs, config.contextChars);
+    const key = `revision:${uid()}`;
+    controllers.current.set(key, controller);
+    try {
+      const result = await requests.run(provider.id, controller.signal, () => generate(provider, config, system, user, controller.signal, () => {}));
+      controller.signal.throwIfAborted();
+      if (!result.trim()) throw new Error('模型未返回修稿规则');
+      return result.trim();
+    } finally { controllers.current.delete(key); }
+  }, [requests]);
   const polishChapter = useCallback(async (projectId: string, chapterId: string, selected: PolishSelection) => {
     if (restarting.current) throw new Error('正在更新软件');
     const key = `polish:${chapterId}`;
@@ -310,6 +345,23 @@ export function useWorkspace() {
       }
     }
   }, [requests, update]);
+  const recheckIssue = useCallback(async (projectId: string, chapterId: string, issue: ReviewIssue, controller: AbortController) => {
+    if (restarting.current) throw new Error('正在更新软件');
+    const state = stateRef.current, project = state.projects.find(p => p.id === projectId), chapter = project?.chapters.find(c => c.id === chapterId);
+    if (!project || !chapter) throw new Error('章节已移除');
+    const config = resolveAI(state.aiSelection, state.providers), provider = state.providers.find(p => p.id === config.providerId)!;
+    const system = '只复查给定的一项小说审稿问题。对照当前正文，指出问题是否仍存在、引用依据；证据不足就明确说明。不要改写正文或指示软件执行操作。限三句话。';
+    let user = JSON.stringify({ 原引文: issue.quote, 问题: issue.reason, 建议: issue.suggestion, 当前正文: chapter.content });
+    user += memoryContext(project, chapterId, Math.min(6000, config.contextChars - user.length - system.length - 200), chapter.content);
+    if (user.length + system.length > config.contextChars) throw new Error('正文超过模型上下文，可对照原文手动复查');
+    const key = `review:${uid()}`; controllers.current.set(key, controller);
+    try {
+      const text = await requests.run(provider.id, controller.signal, () => generate(provider, config, system, user, controller.signal, () => {}));
+      controller.signal.throwIfAborted();
+      if (!text.trim()) throw new Error('未返回复查意见');
+      return { text: text.trim(), hash: contentHash(chapter.content) };
+    } finally { controllers.current.delete(key); }
+  }, [requests]);
   const cancelPolish = useCallback((chapterId: string) => { controllers.current.get(`polish:${chapterId}`)?.abort(); }, []);
   const saveChapter = useCallback(async (projectId: string, chapterId: string) => {
     const key = `${projectId}:${chapterId}`;
@@ -470,6 +522,9 @@ export function useWorkspace() {
       const config = job.collectionTask || job.articleTask ? null : resolveAI(current.aiSelection, current.providers);
       update(s => {
         const item = s.jobs.find(j => j.id === id)!;
+        const legacyPartial = !item.skillPins && !restart && item.steps.some(step => step.status === 'pending' && step.output);
+        captureJobPins(item, s.projects.find(p => p.id === item.projectId));
+        if (legacyPartial && item.skillPins?.length) throw new Error('旧任务未保存固定版本，请重试当前步骤');
         item.ai = config; item.status = 'queued'; item.error = '';
         if (item.novelChat) {
           const project = s.projects.find(value => value.id === item.projectId);
@@ -553,11 +608,20 @@ export function useWorkspace() {
   }, [update, notify]);
   const replace = useCallback(async (workspace: Workspace) => {
     await refreshCredentials(workspace);
+    if (loaded) {
+      const previous = stateRef.current;
+      await saveWorkspace(previous, true);
+      if (previous !== stateRef.current) throw new Error('工作区已更新，请停止编辑或生成后再恢复');
+    } else {
+      // Keep the recovery screen open if the primary storage is still unwritable.
+      await saveWorkspace(workspace);
+    }
     generation.current++; controllers.current.forEach(c => c.abort()); controllers.current.clear();
     setPolishingChapters([]);
     stateRef.current = workspace; setState(workspace); setLoaded(true); setLoadError(''); setSaveStatus('保存中');
-    await saveWorkspace(workspace); if (stateRef.current === workspace) setSaveStatus('已保存');
-  }, []);
+    try { if (loaded) await saveWorkspace(workspace); if (stateRef.current === workspace) setSaveStatus('已保存'); }
+    catch (error) { setSaveStatus('保存失败'); throw error; }
+  }, [loaded]);
   const canUpdate = useCallback(async () => !controllers.current.size && !stateRef.current.jobs.some(job => ['queued', 'running'].includes(job.status)) && !await hasActiveRequests(), []);
   const prepareUpdate = useCallback(async () => {
     restarting.current = true;
@@ -569,7 +633,7 @@ export function useWorkspace() {
     return true;
   }, [canUpdate]);
   const cancelUpdate = useCallback(() => { restarting.current = false; setQueueTick(tick => tick + 1); }, []);
-  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, setAISelection, launch, polishChapter, cancelPolish, polishingChapters, saveChapter, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
+  return { state, stateRef, loaded, saveStatus, loadError, message, messageId, notify, update, rememberPosition, setAISelection, launch, suggestRevisionRules, recheckIssue, polishChapter, cancelPolish, polishingChapters, saveChapter, reextractSkill, startNovelCreation, discardNovelCreation, generateNovelOptions, selectNovelOption, advanceNovelCreation, backNovelCreation, finishNovelCreation, collect, collectArticles, scoreTraining, generateTrainingFeedback, continueTraining, stop, resumeJob, accept, undoNovelAdjustment, replace, canUpdate, prepareUpdate, cancelUpdate };
 }
 export type Store = ReturnType<typeof useWorkspace>;
 export type { Job };
